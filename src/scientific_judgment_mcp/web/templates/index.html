@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scientific Judgment (Phase 9)</title>
+    <style>
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system;
+            margin: 2rem;
+            max-width: 980px;
+        }
+
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        label {
+            display: block;
+            margin: 0.75rem 0 0.25rem;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 0.6rem;
+        }
+
+        button {
+            padding: 0.6rem 1rem;
+        }
+
+        .muted {
+            color: #666;
+        }
+
+        .warn {
+            color: #8a4b00;
+        }
+
+        code {
+            background: #f6f6f6;
+            padding: 0.15rem 0.3rem;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Scientific Judgment (Phase 9)</h1>
+
+    <div class="card">
+        <h2>Run a review</h2>
+        <p class="muted">Artifacts are written to <code>{{ reports_dir }}</code> and linked below.</p>
+        <form method="post" action="/review">
+            <label for="arxiv_id_or_url">arXiv ID or URL</label>
+            <input id="arxiv_id_or_url" name="arxiv_id_or_url" type="text"
+                placeholder="e.g. 2401.00001 or https://arxiv.org/abs/2401.00001" required />
+
+            <label>
+                <input type="checkbox" name="allow_insecure_tls" value="true" />
+                Allow insecure TLS (only if your environment breaks CA verification)
+            </label>
+
+            <label>
+                <input type="checkbox" name="persist_to_supabase" value="true" {% if not supabase_configured
+                    %}disabled{% endif %} />
+                Persist to Supabase (append-only audit trail)
+            </label>
+
+            {% if not supabase_configured %}
+            <p class="warn">Supabase not configured (or init failed). Configure <code>.env</code> and apply
+                <code>supabase/schema.sql</code> in the Supabase SQL editor.</p>
+            {% endif %}
+
+            <p style="margin-top: 1rem;"><button type="submit">Run review</button></p>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Human feedback</h2>
+        <p>Submit critique against an existing persisted review.</p>
+        <p><a href="/feedback">Open feedback form</a></p>
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Human feedback</title>
+    <style>
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system;
+            margin: 2rem;
+            max-width: 980px;
+        }
+
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        label {
+            display: block;
+            margin: 0.75rem 0 0.25rem;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 0.6rem;
+        }
+
+        textarea {
+            min-height: 180px;
+        }
+
+        button {
+            padding: 0.6rem 1rem;
+        }
+
+        .muted {
+            color: #666;
+        }
+
+        .warn {
+            color: #8a4b00;
+        }
+
+        .error {
+            color: #b00020;
+            white-space: pre-wrap;
+        }
+
+        pre {
+            background: #0b1020;
+            color: #e8e8e8;
+            padding: 1rem;
+            border-radius: 10px;
+            overflow-x: auto;
+        }
+
+        code {
+            background: #f6f6f6;
+            padding: 0.15rem 0.3rem;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+
+<body>
+    <p><a href="/">← back</a></p>
+
+    <h1>Human feedback (append-only)</h1>
+
+    {% if not supabase_configured %}
+    <p class="warn">Supabase not configured (or init failed). Configure <code>.env</code> and apply
+        <code>supabase/schema.sql</code> in Supabase.
+    </p>
+    {% endif %}
+
+    <div class="card">
+        <h2>Submit critique</h2>
+        <form method="post" action="/feedback">
+            <label for="review_id">Review ID</label>
+            <input id="review_id" name="review_id" type="text" value="{{ review_id or '' }}" required />
+
+            <label for="critique_text">Critique</label>
+            <textarea id="critique_text" name="critique_text" required></textarea>
+
+            <p style="margin-top: 1rem;"><button type="submit">Submit</button></p>
+        </form>
+    </div>
+
+    {% if submitted %}
+    <div class="card">
+        <h2>Classification</h2>
+        <pre>{{ classification | tojson }}</pre>
+    </div>
+
+    <div class="card">
+        <h2>Forward-only change note</h2>
+        {% if change_note %}
+        <pre>{{ change_note }}</pre>
+        {% else %}
+        <p class="error">Could not generate change note.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Storage result</h2>
+        {% if stored %}
+        <pre>{{ stored | tojson }}</pre>
+        {% else %}
+        <p class="error">Store failed:
+            {{ store_error }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <h2>Comparison</h2>
+        {% if comparison %}
+        <pre>{{ comparison | tojson }}</pre>
+        {% else %}
+        <p class="muted">No comparison available.</p>
+        {% endif %}
+    </div>
+
+</body>
+
+</html>
