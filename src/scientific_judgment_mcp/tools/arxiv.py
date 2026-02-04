@@ -240,6 +240,60 @@ def extract_paper_sections(full_text: str) -> dict[str, str]:
     return sections
 
 
+def _build_full_text_excerpt(full_text: str, *, max_chars: int = 45000) -> str:
+    """Build a targeted excerpt for downstream quote grounding.
+
+    This avoids placing the entire (often huge) extracted PDF text into prompts.
+    Heuristic: take a head snippet plus windows around systematic-review keywords.
+    """
+
+    text = (full_text or "").strip()
+    if not text:
+        return ""
+
+    head = text[:12000]
+    if len(head) >= max_chars:
+        return head[:max_chars]
+
+    keywords = [
+        "systematic review",
+        "prisma",
+        "inclusion criteria",
+        "exclusion criteria",
+        "search strategy",
+        "search string",
+        "database",
+        "databases",
+        "screening",
+        "risk of bias",
+        "quality assessment",
+        "data extraction",
+        "eligibility",
+        "meta-analysis",
+    ]
+
+    windows: list[str] = []
+    lower = text.lower()
+    for kw in keywords:
+        idx = lower.find(kw)
+        if idx < 0:
+            continue
+        start = max(0, idx - 1200)
+        end = min(len(text), idx + 2200)
+        win = text[start:end].strip()
+        if win and win not in windows:
+            windows.append(win)
+        if sum(len(w) for w in windows) + len(head) > max_chars:
+            break
+
+    out = head
+    for w in windows:
+        if len(out) + 3 + len(w) > max_chars:
+            break
+        out += "\n\n---\n" + w
+    return out[:max_chars]
+
+
 def extract_claims_from_abstract(abstract: str) -> list[str]:
     """Heuristically extract claims from abstract.
 
@@ -299,6 +353,8 @@ async def ingest_arxiv_paper(arxiv_id: str, download_dir: Optional[Path] = None)
     # Extract text
     full_text = extract_text_from_pdf(pdf_path)
 
+    excerpt = _build_full_text_excerpt(full_text)
+
     # Extract sections
     sections = extract_paper_sections(full_text)
 
@@ -315,6 +371,7 @@ async def ingest_arxiv_paper(arxiv_id: str, download_dir: Optional[Path] = None)
         methods=sections.get("methods", ""),
         results=sections.get("results", ""),
         limitations=sections.get("limitations", "").split("\n") if "limitations" in sections else [],
+        full_text_excerpt=excerpt,
     )
 
     if _insecure_ssl_enabled():

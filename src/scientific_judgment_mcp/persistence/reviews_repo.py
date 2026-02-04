@@ -33,6 +33,14 @@ class ReviewsRepository:
     def __init__(self, client: Client) -> None:
         self.client = client
 
+    def _best_effort(self, fn) -> Any:
+        try:
+            return fn()
+        except Exception:
+            # Most commonly: PGRST205 (table not found in schema cache) when schema.sql
+            # hasn't been applied yet. Persistence should degrade gracefully.
+            return None
+
     def ensure_paper(self, paper: PaperContext) -> str:
         """Insert paper if missing; returns paper_id.
 
@@ -106,6 +114,46 @@ class ReviewsRepository:
         }
         self.client.table("verdict_versions").insert(row).execute()
         return verdict_id
+
+    def append_review_artifact(self, *, review_id: str, artifact_type: str, artifact: dict[str, Any]) -> None:
+        row = {
+            "review_id": review_id,
+            "artifact_type": str(artifact_type),
+            "artifact": artifact,
+        }
+        self._best_effort(lambda: self.client.table("review_artifacts").insert(row).execute())
+
+    def list_review_artifacts(self, *, review_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self._best_effort(
+            lambda: self.client.table("review_artifacts")
+            .select("*")
+            .eq("review_id", review_id)
+            .order("created_at", desc=False)
+            .limit(int(limit))
+            .execute()
+            .data
+        )
+        if not rows or not isinstance(rows, list):
+            return []
+        return [r for r in rows if isinstance(r, dict)]
+
+    def get_latest_review_artifact(self, *, review_id: str, artifact_type: str) -> dict[str, Any] | None:
+        row = self._best_effort(
+            lambda: self.client.table("review_artifacts")
+            .select("*")
+            .eq("review_id", review_id)
+            .eq("artifact_type", str(artifact_type))
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not row or not isinstance(row, list):
+            return None
+        if not row:
+            return None
+        first = row[0]
+        return first if isinstance(first, dict) else None
 
     def get_latest_verdict_version(self, review_id: str) -> dict[str, Any] | None:
         rows = (
@@ -245,6 +293,22 @@ class ReviewsRepository:
             synthesis=state.get("synthesis", ""),
         )
 
+        # Optional append-only artifacts (best-effort).
+        # Prefer state["review_artifacts"] but support legacy state["evidence_audit"].
+        artifacts = state.get("review_artifacts")
+        if isinstance(artifacts, list):
+            for a in artifacts:
+                if not isinstance(a, dict):
+                    continue
+                atype = a.get("artifact_type") or a.get("type")
+                payload = a.get("artifact") or a.get("payload")
+                if isinstance(atype, str) and isinstance(payload, dict):
+                    self.append_review_artifact(review_id=review_id, artifact_type=atype, artifact=payload)
+
+        ev = state.get("evidence_audit")
+        if isinstance(ev, dict):
+            self.append_review_artifact(review_id=review_id, artifact_type="evidence_audit_v1", artifact=ev)
+
         return StoredReview(review_id=review_id, paper_id=paper_id, created_at=datetime.now().isoformat(), version=version)
 
     def add_human_feedback(
@@ -274,11 +338,14 @@ class ReviewsRepository:
         messages = self.client.table("agent_messages").select("*").eq("review_id", review_id).order("timestamp").execute().data
         feedback = self.client.table("human_feedback").select("*").eq("review_id", review_id).order("created_at").execute().data
 
+        artifacts = self.list_review_artifacts(review_id=review_id, limit=200)
+
         return {
             "review": review,
             "verdict_versions": verdicts,
             "agent_messages": messages,
             "human_feedback": feedback,
+            "review_artifacts": artifacts,
         }
 
     def list_recent_reviews(self, *, limit: int = 50) -> list[dict[str, Any]]:

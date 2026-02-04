@@ -214,6 +214,24 @@
                 </tbody>
             </table>
 
+            {% if r.evidence_audit %}
+            <details>
+                <summary>Evidence audit (PRISMA + quote grounding)</summary>
+                <p class="muted" style="margin: 0.5rem 0 0.75rem 0;">
+                    paper_type: <code>{{ r.evidence_audit.paper_type }}</code>
+                    · quote_pass_rate: <code>{{ r.evidence_audit.quote_pass_rate }}</code>
+                    · grounded: <code>{{ r.evidence_audit.grounded }}</code>
+                    · ungrounded: <code>{{ r.evidence_audit.ungrounded }}</code>
+                </p>
+                <p class="muted" style="margin: 0 0 0.75rem 0;">
+                    PRISMA checklist: present=<code>{{ r.evidence_audit.prisma_present }}</code>
+                    partial=<code>{{ r.evidence_audit.prisma_partial }}</code>
+                    missing=<code>{{ r.evidence_audit.prisma_missing }}</code>
+                    total=<code>{{ r.evidence_audit.prisma_total }}</code>
+                </p>
+            </details>
+            {% endif %}
+
             {% if r.rationale %}
             <details>
                 <summary>Rationale</summary>

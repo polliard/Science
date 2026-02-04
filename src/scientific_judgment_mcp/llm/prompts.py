@@ -46,3 +46,34 @@ def render_paper_context_for_llm(*, title: str, authors: list[str], arxiv_id: st
         "Extracted Results (may be incomplete):\n"
         f"{results_snip}\n"
     )
+
+
+def render_paper_context_for_llm_with_excerpt(
+    *,
+    title: str,
+    authors: list[str],
+    arxiv_id: str,
+    abstract: str,
+    claims: list[str],
+    methods: str,
+    results: str,
+    full_text_excerpt: str,
+) -> str:
+    base = render_paper_context_for_llm(
+        title=title,
+        authors=authors,
+        arxiv_id=arxiv_id,
+        abstract=abstract,
+        claims=claims,
+        methods=methods,
+        results=results,
+    )
+    excerpt = (full_text_excerpt or "").strip()
+    if not excerpt:
+        return base
+
+    excerpt_snip = excerpt[:18000]
+    return base + (
+        "\n\nFull Text Excerpt for Quote Grounding (may be incomplete):\n"
+        f"{excerpt_snip}\n"
+    )

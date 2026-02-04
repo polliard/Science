@@ -6,6 +6,7 @@ multiple LLM backends (per-agent explicit model choice).
 
 import asyncio
 import json
+import re
 from typing import Any, Callable
 from datetime import datetime
 
@@ -26,7 +27,7 @@ from .state_machine import (
 from scientific_judgment_mcp.agents import get_all_agent_specs
 from scientific_judgment_mcp.llm.runner import AgentRunner
 from scientific_judgment_mcp.llm.config import ReviewModelsConfig, load_models_config_from_env
-from scientific_judgment_mcp.llm.prompts import build_phase_prompt, render_paper_context_for_llm
+from scientific_judgment_mcp.llm.prompts import build_phase_prompt, render_paper_context_for_llm_with_excerpt
 
 
 # Progress callbacks are a best-effort mechanism for UIs.
@@ -93,7 +94,7 @@ def _default_models_config() -> ReviewModelsConfig:
 
 
 def _paper_context_text(paper: PaperContext) -> str:
-    return render_paper_context_for_llm(
+    return render_paper_context_for_llm_with_excerpt(
         title=paper.title,
         authors=paper.authors,
         arxiv_id=paper.arxiv_id,
@@ -101,7 +102,30 @@ def _paper_context_text(paper: PaperContext) -> str:
         claims=paper.claims,
         methods=paper.methods,
         results=paper.results,
+        full_text_excerpt=getattr(paper, "full_text_excerpt", "") or "",
     )
+
+
+def _norm_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
+def _quote_in_text(quote: str, text: str) -> tuple[bool, str]:
+    """Best-effort grounding check for a quote against extracted text."""
+    q = (quote or "").strip()
+    if not q:
+        return False, "empty"
+    if len(q) < 10:
+        return False, "too_short"
+    if len(q) > 600:
+        q = q[:600]
+    if q in (text or ""):
+        return True, "exact"
+    qn = _norm_ws(q)
+    tn = _norm_ws(text)
+    if qn and qn in tn:
+        return True, "whitespace_normalized"
+    return False, "not_found"
 
 
 def _append_agent_message(
@@ -194,6 +218,8 @@ def initialize_debate(state: DebateState) -> DebateState:
     state.setdefault("agent_model_configs", {})
     state.setdefault("model_divergence", [])
     state.setdefault("extraction_limitations", [])
+    state.setdefault("review_artifacts", [])
+    state.setdefault("evidence_audit", {})
 
     # Carry forward any ingestion-time limitations (e.g., PDF parsing issues, insecure TLS).
     try:
@@ -363,7 +389,18 @@ def review_evidence(state: DebateState) -> DebateState:
 
     instructions = (
         "Assess whether the results support the enumerated claims; identify gaps and alternative explanations. "
-        "Return JSON: {\"findings\": {\"key\": \"finding\"}, \"overall\": \"...\", \"extraction_limitations\": [..]}"
+        "Additionally, produce a quote-grounded Evidence Audit with a PRISMA-style checklist when the paper is a systematic review. "
+        "Quotes MUST be exact substrings of the PAPER CONTEXT provided (copy/paste). "
+        "Return JSON: {"
+        "\"findings\": {\"key\": \"finding\"}, "
+        "\"overall\": \"...\", "
+        "\"evidence_audit\": {"
+        "  \"paper_type\": \"systematic_review\"|\"empirical\"|\"theory\"|\"unknown\", "
+        "  \"prisma_checklist\": [{\"item\": str, \"status\": \"present\"|\"partial\"|\"missing\"|\"na\", \"quote\": str, \"notes\": str}], "
+        "  \"evidence_items\": [{\"assertion\": str, \"quote\": str, \"location_hint\": str, \"importance\": \"high\"|\"med\"|\"low\"}], "
+        "  \"limitations\": [str]"
+        "}, "
+        "\"extraction_limitations\": [..]}"
     )
 
     ev_raw = _run_agent_json(
@@ -391,6 +428,75 @@ def review_evidence(state: DebateState) -> DebateState:
         )
 
     state["evidence_findings"] = findings
+
+    # Evidence audit (optional / best-effort)
+    audit = (ev_raw or {}).get("evidence_audit") if isinstance(ev_raw, dict) else None
+    if isinstance(audit, dict):
+        paper_text = _paper_context_text(state["paper"])
+
+        prisma = audit.get("prisma_checklist")
+        evidence_items = audit.get("evidence_items")
+        prisma_checks: list[dict[str, Any]] = []
+        evidence_checks: list[dict[str, Any]] = []
+
+        grounded = 0
+        ungrounded = 0
+
+        if isinstance(prisma, list):
+            for it in prisma:
+                if not isinstance(it, dict):
+                    continue
+                status = str(it.get("status") or "").lower()
+                quote = it.get("quote") if isinstance(it.get("quote"), str) else ""
+                require_quote = status in {"present", "partial"}
+                ok, how = (False, "not_required")
+                if require_quote:
+                    ok, how = _quote_in_text(quote, paper_text)
+                    grounded += 1 if ok else 0
+                    ungrounded += 0 if ok else 1
+                prisma_checks.append({
+                    "item": it.get("item"),
+                    "status": status,
+                    "quote": quote,
+                    "quote_ok": ok if require_quote else None,
+                    "match": how,
+                    "notes": it.get("notes"),
+                })
+
+        if isinstance(evidence_items, list):
+            for it in evidence_items:
+                if not isinstance(it, dict):
+                    continue
+                quote = it.get("quote") if isinstance(it.get("quote"), str) else ""
+                ok, how = _quote_in_text(quote, paper_text)
+                grounded += 1 if ok else 0
+                ungrounded += 0 if ok else 1
+                evidence_checks.append({
+                    "assertion": it.get("assertion"),
+                    "importance": it.get("importance"),
+                    "location_hint": it.get("location_hint"),
+                    "quote": quote,
+                    "quote_ok": ok,
+                    "match": how,
+                })
+
+        total = grounded + ungrounded
+        pass_rate = round((grounded / total), 3) if total else None
+        audit_enriched = dict(audit)
+        audit_enriched["quote_verification"] = {
+            "grounded": grounded,
+            "ungrounded": ungrounded,
+            "pass_rate": pass_rate,
+        }
+        audit_enriched["checks"] = {
+            "prisma": prisma_checks,
+            "evidence_items": evidence_checks,
+        }
+
+        state["evidence_audit"] = audit_enriched
+        state.setdefault("review_artifacts", []).append(
+            {"artifact_type": "evidence_audit_v1", "artifact": audit_enriched}
+        )
 
     return state
 
@@ -711,6 +817,8 @@ async def run_debate_async(
         "methodological_findings": {},
         "evidence_findings": {},
         "coi_findings": {},
+        "review_artifacts": [],
+        "evidence_audit": {},
         "verdict": None,
         "synthesis": "",
         "start_time": datetime.now(),

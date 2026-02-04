@@ -105,6 +105,11 @@ class PaperContext(BaseModel):
         default="",
         description="Extracted results section"
     )
+
+    full_text_excerpt: str = Field(
+        default="",
+        description="Targeted excerpt of extracted PDF text for quote grounding (may be incomplete)"
+    )
     limitations: list[str] = Field(
         default_factory=list,
         description="Explicit or missing limitations"
@@ -134,6 +139,10 @@ class DebateState(TypedDict):
     methodological_findings: dict[str, str]
     evidence_findings: dict[str, str]
     coi_findings: dict[str, str]
+
+    # Optional append-only artifacts (best-effort; may be absent)
+    review_artifacts: list[dict]
+    evidence_audit: dict
 
     # Final outputs
     verdict: VerdictDimension | None

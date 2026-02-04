@@ -182,6 +182,34 @@ def generate_markdown_report(state: DebateState, output_dir: Path) -> Path:
     for key, finding in state["evidence_findings"].items():
         report_lines.append(f"- **{key}**: {finding}")
 
+    audit = state.get("evidence_audit")
+    if isinstance(audit, dict) and audit:
+        report_lines.extend([
+            "",
+            "### Evidence Audit (Quote-Grounded)",
+            "",
+        ])
+        qv = audit.get("quote_verification") if isinstance(audit.get("quote_verification"), dict) else {}
+        if isinstance(qv, dict) and qv:
+            report_lines.append(
+                f"- Quote grounding pass rate: {qv.get('pass_rate')} (grounded={qv.get('grounded')}, ungrounded={qv.get('ungrounded')})"
+            )
+
+        paper_type = audit.get("paper_type")
+        if paper_type:
+            report_lines.append(f"- Detected paper type: {paper_type}")
+
+        prisma = audit.get("prisma_checklist")
+        if isinstance(prisma, list) and prisma:
+            missing = [p for p in prisma if isinstance(p, dict) and str(p.get("status") or "").lower() == "missing"]
+            partial = [p for p in prisma if isinstance(p, dict) and str(p.get("status") or "").lower() == "partial"]
+            report_lines.append(f"- PRISMA checklist: missing={len(missing)}, partial={len(partial)}, total={len(prisma)}")
+            for p in (missing[:5] + partial[:3]):
+                item = (p or {}).get("item")
+                st = (p or {}).get("status")
+                if item:
+                    report_lines.append(f"  - {st}: {item}")
+
     report_lines.extend(["", "---", ""])
 
     # Conflicts of Interest (Appendix)
