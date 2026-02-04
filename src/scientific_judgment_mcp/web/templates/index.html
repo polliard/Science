@@ -5,102 +5,99 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Scientific Judgment (Phase 9)</title>
-    <style>
-        body {
-            font-family: ui-sans-serif, system-ui, -apple-system;
-            margin: 2rem;
-            max-width: 980px;
-        }
-
-        .card {
-            border: 1px solid #ddd;
-            border-radius: 10px;
-            padding: 1rem;
-            margin-bottom: 1rem;
-        }
-
-        label {
-            display: block;
-            margin: 0.75rem 0 0.25rem;
-        }
-
-        input[type="text"] {
-            width: 100%;
-            padding: 0.6rem;
-        }
-
-        button {
-            padding: 0.6rem 1rem;
-        }
-
-        .muted {
-            color: #666;
-        }
-
-        .warn {
-            color: #8a4b00;
-        }
-
-        code {
-            background: #f6f6f6;
-            padding: 0.15rem 0.3rem;
-            border-radius: 6px;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/app.css" />
 </head>
 
 <body>
-    <h1>Scientific Judgment (Phase 9)</h1>
+    <header class="topbar">
+        <div class="nav" aria-label="Primary">
+            <a href="/">Home</a>
+            <a href="/papers">Papers</a>
+            <a href="/reviews">Reviews</a>
+            <a href="/feedback">Feedback</a>
+        </div>
+        <div class="muted" style="font-size: 13px;">Phase 9</div>
+    </header>
 
-    <div class="card">
-        <h2>Run a review</h2>
-        <p class="muted">Artifacts are written to <code>{{ reports_dir }}</code> and linked below.</p>
-        <form method="post" action="/review">
-            <label for="arxiv_id_or_url">arXiv ID or URL</label>
-            <input id="arxiv_id_or_url" name="arxiv_id_or_url" type="text"
-                placeholder="e.g. 2401.00001 or https://arxiv.org/abs/2401.00001" required />
+    <main class="container">
+        <h1 class="page-title">Scientific Judgment</h1>
+        <p class="subtitle">Run reviews, browse prior results, and submit human critique.</p>
 
-            <label>
-                <input type="checkbox" name="allow_insecure_tls" value="true" />
-                Allow insecure TLS (only if your environment breaks CA verification)
-            </label>
+        <section class="card stack" aria-labelledby="run-review">
+            <h2 id="run-review" style="margin: 0;">Run a review</h2>
+            <p class="muted" style="margin: 0;">Artifacts are written to <code>{{ reports_dir }}</code>.</p>
 
-            <label>
-                <input type="checkbox" name="persist_to_supabase" value="true" {% if not supabase_configured
-                    %}disabled{% else %}checked{% endif %} />
-                Persist to Supabase (append-only audit trail)
-            </label>
+            <form method="post" action="/review">
+                <label class="label" for="arxiv_id_or_url">arXiv ID or URL</label>
+                <input class="input" id="arxiv_id_or_url" name="arxiv_id_or_url" type="text"
+                    placeholder="e.g. 2401.00001 or https://arxiv.org/abs/2401.00001" autocomplete="off" required />
 
-            <label for="num_reviews">Independent review runs</label>
-            <input id="num_reviews" name="num_reviews" type="text" value="2" />
-            <p class="muted">Runs the full round-table review N times and (if checked) persists each run as a separate
-                review row.</p>
+                <label class="label" for="num_reviews">Independent review runs</label>
+                <input class="input" id="num_reviews" name="num_reviews" type="number" min="1"
+                    max="{{ max_reviews_per_job }}" value="{{ default_num_reviews }}" />
+                <p class="muted" style="margin-top: 6px;">Runs the full round-table review N times; each run can be
+                    persisted as a separate review row.</p>
 
-            {% if not supabase_configured %}
-            <p class="warn">Supabase not configured (or init failed). Configure <code>.env</code> and apply
-                <code>supabase/schema.sql</code> in the Supabase SQL editor.
-            </p>
-            {% if dotenv_loaded_from %}
-            <p class="muted">dotenv loaded from: <code>{{ dotenv_loaded_from }}</code></p>
+                <div class="callout" style="margin-top: 14px;">
+                    <div><strong>Final vs Interim</strong></div>
+                    <div class="muted" style="margin-top: 4px;">Final adjudication requires
+                        <code>{{ min_final_reviews }}</code>+ persisted reviews.</div>
+                </div>
+
+                <label class="label" style="margin-top: 14px;">
+                    <input type="checkbox" name="persist_to_supabase" value="true" {% if not supabase_configured
+                        %}disabled{% else %}{% if default_persist_to_supabase %}checked{% endif %}{% endif %} />
+                    Persist to Supabase (append-only audit trail)
+                </label>
+
+                <label class="label" style="margin-top: 10px;">
+                    <input type="checkbox" name="allow_insecure_tls" value="true" {% if default_allow_insecure_tls
+                        %}checked{% endif %} />
+                    Allow insecure TLS
+                </label>
+                <p class="muted" style="margin-top: 6px;">Only use this if your environment breaks CA verification;
+                    prefer fixing trust roots.</p>
+
+                <details style="margin-top: 14px;">
+                    <summary>Override: paper updated</summary>
+                    <p class="muted">If the paper already has a Final adjudication, re-review is disabled unless you
+                        confirm the paper has materially changed since those reviews.</p>
+                    <label class="label" style="margin-top: 10px;">
+                        <input type="checkbox" name="force" value="true" />
+                        I confirm the paper has been updated
+                    </label>
+                </details>
+
+                {% if not supabase_configured %}
+                <div class="callout" style="margin-top: 14px;">
+                    <strong>Supabase not configured</strong>
+                    <div class="muted" style="margin-top: 4px;">Configure <code>.env</code> and apply
+                        <code>supabase/schema.sql</code> in the Supabase SQL editor.</div>
+                    {% if dotenv_loaded_from %}
+                    <div class="muted" style="margin-top: 6px;">dotenv loaded from:
+                        <code>{{ dotenv_loaded_from }}</code></div>
+                    {% endif %}
+                    {% if supabase_error %}
+                    <div class="muted" style="margin-top: 6px;">Supabase init error: <code>{{ supabase_error }}</code>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                <p style="margin-top: 16px;"><button class="btn btn-primary" type="submit">Run review</button></p>
+            </form>
+        </section>
+
+        <section class="card stack" aria-labelledby="feedback">
+            <h2 id="feedback" style="margin: 0;">Human feedback</h2>
+            <p style="margin: 0;">Submit critique against an existing persisted review.</p>
+            <p style="margin: 0;"><a href="/feedback">Open feedback form</a></p>
+            {% if supabase_configured %}
+            <p style="margin: 0;"><a href="/papers">Browse papers (grouped)</a></p>
+            <p style="margin: 0;"><a href="/reviews">Browse persisted reviews</a></p>
             {% endif %}
-            {% if supabase_error %}
-            <p class="warn">Supabase init error: <code>{{ supabase_error }}</code></p>
-            {% endif %}
-            {% endif %}
-
-            <p style="margin-top: 1rem;"><button type="submit">Run review</button></p>
-        </form>
-    </div>
-
-    <div class="card">
-        <h2>Human feedback</h2>
-        <p>Submit critique against an existing persisted review.</p>
-        <p><a href="/feedback">Open feedback form</a></p>
-        {% if supabase_configured %}
-        <p><a href="/papers">Browse papers (grouped)</a></p>
-        <p><a href="/reviews">Browse persisted reviews</a></p>
-        {% endif %}
-    </div>
+        </section>
+    </main>
 </body>
 
 </html>

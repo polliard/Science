@@ -5,133 +5,100 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Review detail</title>
-    <style>
-        body {
-            font-family: ui-sans-serif, system-ui, -apple-system;
-            margin: 2rem;
-            max-width: 1100px;
-        }
-
-        .row {
-            display: flex;
-            gap: 1rem;
-            flex-wrap: wrap;
-        }
-
-        .card {
-            border: 1px solid #ddd;
-            border-radius: 10px;
-            padding: 1rem;
-            margin-bottom: 1rem;
-            flex: 1;
-            min-width: 320px;
-        }
-
-        .muted {
-            color: #666;
-        }
-
-        pre {
-            background: #0b1020;
-            color: #e8e8e8;
-            padding: 1rem;
-            border-radius: 10px;
-            overflow-x: auto;
-        }
-
-        code {
-            background: #f6f6f6;
-            padding: 0.15rem 0.3rem;
-            border-radius: 6px;
-        }
-
-        a {
-            color: #2b6cb0;
-        }
-
-        ul {
-            margin: 0.5rem 0 0 1.25rem;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/app.css" />
 </head>
 
 <body>
-    <p>
-        <a href="/">← back</a>
-        · <a href="/reviews">all reviews</a>
-    </p>
+    <header class="topbar">
+        <div class="nav" aria-label="Primary">
+            <a href="/">Home</a>
+            <a href="/papers">Papers</a>
+            <a href="/reviews">Reviews</a>
+            <a href="/feedback">Feedback</a>
+        </div>
+        <div class="muted" style="font-size: 13px;">Phase 9</div>
+    </header>
 
-    <h1>Review</h1>
-    <p class="muted"><code>{{ review_id }}</code></p>
+    <main class="container stack">
+        <h1 class="page-title">Review</h1>
+        <p class="subtitle"><code>{{ review_id }}</code></p>
 
-    <div class="row">
-        <div class="card">
-            <h2>Actions</h2>
-            <ul>
-                <li><a href="/reviews/{{ review_id }}/bundle.json">Download bundle JSON</a></li>
-                {% if paper_id %}
-                <li><a href="/papers/{{ paper_id }}/compare">Compare and contrast all reviews for this paper</a></li>
-                <li><a href="/papers/{{ paper_id }}">View paper</a></li>
-                {% else %}
-                <li class="muted">Paper not linked; cannot compare across runs</li>
+        <div class="row">
+            <section class="card" aria-label="Actions">
+                <h2 style="margin: 0;">Actions</h2>
+                <ul>
+                    <li><a href="/reviews/{{ review_id }}/bundle.json">Download bundle JSON</a></li>
+                    {% if paper_id %}
+                    <li><a href="/papers/{{ paper_id }}/compare">Compare all reviews for this paper</a></li>
+                    <li><a href="/papers/{{ paper_id }}">View paper</a></li>
+                    {% else %}
+                    <li class="muted">Paper not linked; cannot compare across runs</li>
+                    {% endif %}
+                </ul>
+            </section>
+
+            <section class="card" aria-label="Bundle summary">
+                <h2 style="margin: 0;">Bundle summary</h2>
+                <ul>
+                    <li>messages: <code>{{ (bundle.agent_messages|length) if bundle.agent_messages else 0 }}</code></li>
+                    <li>verdict_versions:
+                        <code>{{ (bundle.verdict_versions|length) if bundle.verdict_versions else 0 }}</code>
+                    </li>
+                    <li>human_feedback:
+                        <code>{{ (bundle.human_feedback|length) if bundle.human_feedback else 0 }}</code>
+                    </li>
+                </ul>
+            </section>
+
+            <section class="card" aria-label="Publishability">
+                <h2 style="margin: 0;">Publishability</h2>
+                {% if publishability %}
+                <ul>
+                    <li>decision: <code>{{ publishability.decision }}</code></li>
+                    <li>publishable: <code>{{ publishability.publishable }}</code></li>
+                    <li>provisional: <code>{{ publishability.provisional }}</code></li>
+                </ul>
+                {% if publishability.gates %}
+                <p class="muted" style="margin: 0.75rem 0 0 0;">gates</p>
+                <pre>{{ publishability.gates | tojson }}</pre>
                 {% endif %}
-            </ul>
+                {% if publishability.reasons %}
+                <p class="muted" style="margin: 0.75rem 0 0 0;">reasons</p>
+                <pre>{{ publishability.reasons | tojson }}</pre>
+                {% endif %}
+                {% else %}
+                <p class="muted">No publishability computed (no verdict found).</p>
+                {% endif %}
+            </section>
         </div>
 
-        <div class="card">
-            <h2>Bundle summary</h2>
-            <ul>
-                <li>messages: <code>{{ (bundle.agent_messages|length) if bundle.agent_messages else 0 }}</code></li>
-                <li>verdict_versions:
-                    <code>{{ (bundle.verdict_versions|length) if bundle.verdict_versions else 0 }}</code>
-                </li>
-                <li>human_feedback: <code>{{ (bundle.human_feedback|length) if bundle.human_feedback else 0 }}</code>
-                </li>
-            </ul>
-        </div>
+        <section class="card" aria-label="Review row">
+            <h2 style="margin: 0;">Review row</h2>
+            <pre>{{ bundle.review | tojson }}</pre>
+        </section>
 
-        <div class="card">
-            <h2>Publishability</h2>
-            {% if publishability %}
-            <ul>
-                <li>decision: <code>{{ publishability.decision }}</code></li>
-                <li>publishable: <code>{{ publishability.publishable }}</code></li>
-                <li>provisional: <code>{{ publishability.provisional }}</code></li>
-            </ul>
-            {% if publishability.gates %}
-            <p class="muted" style="margin: 0.75rem 0 0 0;">gates</p>
-            <pre>{{ publishability.gates | tojson }}</pre>
-            {% endif %}
-            {% if publishability.reasons %}
-            <p class="muted" style="margin: 0.75rem 0 0 0;">reasons</p>
-            <pre>{{ publishability.reasons | tojson }}</pre>
-            {% endif %}
-            {% else %}
-            <p class="muted">No publishability computed (no verdict found).</p>
-            {% endif %}
-        </div>
-    </div>
+        <section class="card" aria-label="Verdict versions">
+            <h2 style="margin: 0;">Verdict versions</h2>
+            <pre>{{ bundle.verdict_versions | tojson }}</pre>
+        </section>
 
-    <div class="card">
-        <h2>Review row</h2>
-        <pre>{{ bundle.review | tojson }}</pre>
-    </div>
+        <section class="card" aria-label="Review artifacts">
+            <h2 style="margin: 0;">Review artifacts</h2>
+            <p class="muted">Append-only artifacts like evidence audits and checklists.</p>
+            <pre>{{ (bundle.review_artifacts if bundle.review_artifacts else []) | tojson }}</pre>
+        </section>
 
-    <div class="card">
-        <h2>Verdict versions</h2>
-        <pre>{{ bundle.verdict_versions | tojson }}</pre>
-    </div>
+        <section class="card" aria-label="Human feedback">
+            <h2 style="margin: 0;">Human feedback</h2>
+            <pre>{{ bundle.human_feedback | tojson }}</pre>
+        </section>
 
-    <div class="card">
-        <h2>Human feedback</h2>
-        <pre>{{ bundle.human_feedback | tojson }}</pre>
-    </div>
-
-    <div class="card">
-        <h2>Agent messages (first 10)</h2>
-        <pre>{{ (bundle.agent_messages[:10] if bundle.agent_messages else []) | tojson }}</pre>
-        <p class="muted">This page truncates messages for readability; the bundle JSON contains all.</p>
-    </div>
+        <section class="card" aria-label="Agent messages">
+            <h2 style="margin: 0;">Agent messages (first 10)</h2>
+            <pre>{{ (bundle.agent_messages[:10] if bundle.agent_messages else []) | tojson }}</pre>
+            <p class="muted">This page truncates messages for readability; the bundle JSON contains all.</p>
+        </section>
+    </main>
 </body>
 
 </html>

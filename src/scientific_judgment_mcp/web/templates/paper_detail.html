@@ -5,114 +5,131 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Paper</title>
-    <style>
-        body {
-            font-family: ui-sans-serif, system-ui, -apple-system;
-            margin: 2rem;
-            max-width: 1100px;
-        }
-
-        .row {
-            display: flex;
-            gap: 1rem;
-            flex-wrap: wrap;
-        }
-
-        .card {
-            border: 1px solid #ddd;
-            border-radius: 10px;
-            padding: 1rem;
-            margin-bottom: 1rem;
-            flex: 1;
-            min-width: 340px;
-        }
-
-        .muted {
-            color: #666;
-        }
-
-        pre {
-            background: #0b1020;
-            color: #e8e8e8;
-            padding: 1rem;
-            border-radius: 10px;
-            overflow-x: auto;
-        }
-
-        code {
-            background: #f6f6f6;
-            padding: 0.15rem 0.3rem;
-            border-radius: 6px;
-        }
-
-        a {
-            color: #2b6cb0;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        th,
-        td {
-            text-align: left;
-            padding: 0.5rem;
-            border-bottom: 1px solid #eee;
-            vertical-align: top;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/app.css" />
 </head>
 
 <body>
-    <p>
-        <a href="/papers">← back to papers</a>
-        · <a href="/reviews">all reviews</a>
-    </p>
+    <header class="topbar">
+        <div class="nav" aria-label="Primary">
+            <a href="/">Home</a>
+            <a href="/papers">Papers</a>
+            <a href="/reviews">Reviews</a>
+        </div>
+        <div class="muted" style="font-size: 13px;">Paper</div>
+    </header>
 
-    <h1>Paper</h1>
-    <p class="muted">
-        arXiv: <code>{{ paper.arxiv_id }}</code>
-    </p>
+    <main class="container">
+        <h1 class="page-title">Paper</h1>
+        <p class="subtitle">arXiv: <code>{{ paper.arxiv_id }}</code></p>
 
-    <div class="card">
-        <h2>Title</h2>
-        <p>{{ paper.title }}</p>
-        <h3 class="muted">Authors</h3>
-        <pre>{{ paper.authors | tojson }}</pre>
-        <h3 class="muted">Abstract</h3>
-        <pre>{{ paper.abstract }}</pre>
-    </div>
+        <section class="card stack" aria-label="Paper metadata">
+            <div>
+                <div class="muted" style="font-size: 13px; text-transform: uppercase; letter-spacing: 0.03em;">Title
+                </div>
+                <div style="font-size: 18px; font-weight: 700; margin-top: 4px;">{{ paper.title }}</div>
+            </div>
+            <div>
+                <div class="muted" style="font-size: 13px; text-transform: uppercase; letter-spacing: 0.03em;">Authors
+                </div>
+                <pre style="margin-top: 8px;">{{ paper.authors | tojson }}</pre>
+            </div>
+            <div>
+                <div class="muted" style="font-size: 13px; text-transform: uppercase; letter-spacing: 0.03em;">Abstract
+                </div>
+                <pre style="margin-top: 8px;">{{ paper.abstract }}</pre>
+            </div>
+        </section>
 
-    <div class="card">
-        <h2>Reviews for this paper</h2>
-        {% if reviews and reviews|length > 1 %}
-        <p>
-            <a href="/papers/{{ paper.id }}/compare">Compare and contrast all reviews</a>
-            <span class="muted">(consensus + disagreements, not a text diff)</span>
-        </p>
-        {% endif %}
-        {% if reviews and reviews|length > 0 %}
-        <table>
-            <thead>
-                <tr>
-                    <th>Review ID</th>
-                    <th>Created</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for r in reviews %}
-                <tr>
-                    <td><a href="/reviews/{{ r.id }}"><code>{{ r.id }}</code></a></td>
-                    <td class="muted">{{ r.created_at }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% else %}
-        <p class="muted">No reviews found for this paper.</p>
-        {% endif %}
-    </div>
+        <section class="card stack" aria-label="Publishability">
+            <h2 style="margin: 0;">Publishability (latest)</h2>
+            {% if latest_review_id %}
+            <div>
+                <strong>{{ latest_publishability_label }}</strong>
+                <span class="muted">· {{ latest_publishability_summary }}</span>
+            </div>
+            <div>
+                <a href="/papers/{{ paper.id }}/publishability">View publishability result</a>
+                <span class="muted">(always explains why)</span>
+            </div>
+            <div class="muted">Final adjudication requires <code>{{ min_final_reviews }}</code>+ independent reviews.
+            </div>
+
+            {% if publishability_finality == 'Interim' and max_additional_reviews > 0 %}
+            <form method="post" action="/review" class="stack" style="margin-top: 6px;">
+                <input type="hidden" name="arxiv_id_or_url" value="{{ paper.arxiv_id }}" />
+                <input type="hidden" name="persist_to_supabase" value="true" />
+                <div class="muted" style="font-size: 13px;">Request more reviews</div>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <select class="select" name="num_reviews">
+                        {% for n in range(1, max_additional_reviews + 1) %}
+                        <option value="{{ n }}">{{ n }}</option>
+                        {% endfor %}
+                    </select>
+                    <button class="btn btn-primary" type="submit">Run</button>
+                    <span class="muted">Needs <code>{{ remaining_reviews_to_final }}</code> more for Final</span>
+                </div>
+            </form>
+            {% elif publishability_finality == 'Final' %}
+            <p class="muted">Review locked (Final). Re-run only if the paper is updated.</p>
+
+            <details style="margin-top:0.5rem;">
+                <summary>Review updated paper (override)</summary>
+                <form method="post" action="/review" style="margin-top:0.5rem;">
+                    <label class="label" for="arxiv_id_or_url_override">arXiv ID or URL</label>
+                    <input class="input" id="arxiv_id_or_url_override" name="arxiv_id_or_url" type="text"
+                        value="{{ paper.arxiv_id }}" />
+                    <input type="hidden" name="persist_to_supabase" value="true" />
+                    <label class="label" style="margin-top:0.5rem;">
+                        <input type="checkbox" name="force" value="true" />
+                        I confirm the paper has been updated
+                    </label>
+                    <label class="label" style="margin-top:0.5rem;">Independent review runs</label>
+                    <select class="select" name="num_reviews">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                    </select>
+                    <button class="btn btn-primary" type="submit" style="margin-left:0.5rem;">Run</button>
+                </form>
+            </details>
+            {% endif %}
+            {% else %}
+            <p class="muted">No reviews available yet.</p>
+            {% endif %}
+        </section>
+
+        <section class="card stack" aria-label="Reviews">
+            <h2 style="margin: 0;">Reviews for this paper</h2>
+            {% if reviews and reviews|length > 1 %}
+            <p>
+                <a href="/papers/{{ paper.id }}/compare">Compare and contrast all reviews</a>
+                <span class="muted">(consensus + disagreements, not a text diff)</span>
+            </p>
+            {% endif %}
+            {% if reviews and reviews|length > 0 %}
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Review ID</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in reviews %}
+                    <tr>
+                        <td><a href="/reviews/{{ r.id }}"><code>{{ r.id }}</code></a></td>
+                        <td class="muted">{{ r.created_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="muted">No reviews found for this paper.</p>
+            {% endif %}
+        </section>
+    </main>
 </body>
 
 </html>

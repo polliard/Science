@@ -56,6 +56,16 @@ create table if not exists human_feedback (
   created_at timestamptz not null default now()
 );
 
+-- Phase 9.6: Append-only per-review artifacts (e.g., evidence audits, checklists)
+
+create table if not exists review_artifacts (
+  id uuid primary key default gen_random_uuid(),
+  review_id uuid not null references reviews(id),
+  artifact_type text not null,
+  artifact jsonb not null,
+  created_at timestamptz not null default now()
+);
+
 -- Phase 9.5: Durable web adjudication jobs
 -- State flow: submitted -> adjudicating -> adjudicated (or error)
 
@@ -92,6 +102,8 @@ create index if not exists idx_reviews_paper_id on reviews(paper_id);
 create index if not exists idx_agent_messages_review_id on agent_messages(review_id);
 create index if not exists idx_verdict_versions_review_id on verdict_versions(review_id);
 create index if not exists idx_human_feedback_review_id on human_feedback(review_id);
+
+create index if not exists idx_review_artifacts_review_id on review_artifacts(review_id);
 
 create index if not exists idx_review_jobs_created_at on review_jobs(created_at);
 create index if not exists idx_review_job_events_job_id on review_job_events(job_id);

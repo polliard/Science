@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Publishability result</title>
+    <link rel="stylesheet" href="/static/app.css" />
+</head>
+
+<body>
+    <header class="topbar">
+        <div class="nav" aria-label="Primary">
+            <a href="/">Home</a>
+            <a href="/papers">Papers</a>
+            <a href="/reviews">Reviews</a>
+        </div>
+        <div class="muted" style="font-size: 13px;">Publishability</div>
+    </header>
+
+    <main class="container">
+        <h1 class="page-title">Publishability result</h1>
+        <p class="subtitle">
+            arXiv: <code>{{ paper.arxiv_id }}</code>
+            {% if review_id %} · review: <a href="/reviews/{{ review_id }}"><code>{{ review_id }}</code></a>{% endif %}
+            {% if verdict_version %} · verdict version: <code>{{ verdict_version }}</code>{% endif %}
+        </p>
+
+        <section class="card stack" aria-label="Publishability summary">
+            {% if publishability_decision_label == 'Publishable' %}
+            <span class="badge good">{{ publishability_label }}</span>
+            {% elif publishability_decision_label == 'Revise & resubmit' %}
+            <span class="badge mid">{{ publishability_label }}</span>
+            {% elif publishability_decision_label == 'Unverified' %}
+            <span class="badge mid">{{ publishability_label }}</span>
+            {% else %}
+            <span class="badge bad">{{ publishability_label }}</span>
+            {% endif %}
+
+            {% if publishability and publishability.provisional %}
+            <span class="badge mid">Provisional</span>
+            {% endif %}
+
+            <div class="callout">
+                <strong>Why</strong>
+                <div class="muted" style="margin-top: 4px;">{{ publishability_summary }}</div>
+            </div>
+
+            {% if publishability_finality == 'Interim' %}
+            <div class="callout">
+                <strong>Interim</strong>
+                <div class="muted" style="margin-top: 4px;">Based on fewer than <code>{{ min_final_reviews }}</code>
+                    independent reviews.</div>
+                {% if remaining_reviews_to_final and remaining_reviews_to_final > 0 %}
+                <div class="muted" style="margin-top: 4px;">Needs <code>{{ remaining_reviews_to_final }}</code> more
+                    review(s) for Final adjudication.</div>
+                {% endif %}
+            </div>
+
+            {% if max_additional_reviews and max_additional_reviews > 0 %}
+            <form method="post" action="/review" class="stack">
+                <input type="hidden" name="arxiv_id_or_url" value="{{ paper.arxiv_id }}" />
+                <input type="hidden" name="persist_to_supabase" value="true" />
+                <div class="muted" style="font-size: 13px;">Request more reviews</div>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <select class="select" name="num_reviews">
+                        {% for n in range(1, max_additional_reviews + 1) %}
+                        <option value="{{ n }}">{{ n }}</option>
+                        {% endfor %}
+                    </select>
+                    <button class="btn btn-primary" type="submit">Run</button>
+                </div>
+            </form>
+            {% endif %}
+            {% endif %}
+
+            {% if publishability and publishability.reasons and publishability.reasons|length > 0 %}
+            <div class="muted" style="font-size: 13px;">Consolidated reasons</div>
+            <ul>
+                {% for r in publishability.reasons %}
+                <li>{{ r }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+
+            {% if publishability_finality == 'Final' %}
+            <details>
+                <summary>Review updated paper (override)</summary>
+                <p class="muted">Re-review is blocked after Final adjudication unless the paper has materially changed
+                    since those reviews.</p>
+                <form method="post" action="/review" style="margin-top:0.5rem;">
+                    <label class="label" for="arxiv_id_or_url_override">arXiv ID or URL</label>
+                    <input class="input" id="arxiv_id_or_url_override" name="arxiv_id_or_url" type="text"
+                        value="{{ paper.arxiv_id }}" />
+                    <input type="hidden" name="persist_to_supabase" value="true" />
+                    <label class="label" style="margin-top:0.5rem;">
+                        <input type="checkbox" name="force" value="true" />
+                        I confirm the paper has been updated
+                    </label>
+                    <label class="label" style="margin-top:0.5rem;">Independent review runs</label>
+                    <select class="select" name="num_reviews">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                    </select>
+                    <button class="btn btn-primary" type="submit" style="margin-left:0.5rem;">Run</button>
+                </form>
+            </details>
+            {% endif %}
+        </section>
+
+        <div class="row" style="margin-top: 14px;">
+            <section class="card stack" aria-label="Grounding">
+                <h2 style="margin: 0;">Grounding</h2>
+                {% if publishability_decision_label == 'Publishable' %}
+                <p>The latest verdict clears the canonical publishability gates (methodology, evidence, and overreach).
+                </p>
+                {% else %}
+                <p>The latest verdict does not clear one or more canonical publishability gates.</p>
+                {% endif %}
+
+                {% if dimensions and dimensions|length > 0 %}
+                <div class="kv">
+                    {% for k, v in dimensions.items() %}
+                    <div><strong>{{ k }}</strong>: {{ v }}/5</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                {% if rationale %}
+                <h3 class="muted" style="margin: 0;">Verdict rationale</h3>
+                <pre>{{ rationale }}</pre>
+                {% endif %}
+
+                {% if aggregate_stats and aggregate_stats|length > 0 %}
+                <h3 class="muted" style="margin: 0;">Aggregate stats</h3>
+                <pre>{{ aggregate_stats | tojson(indent=2) }}</pre>
+                {% endif %}
+
+                {% if synthesis %}
+                <h3 class="muted" style="margin: 0;">Synthesis</h3>
+                <pre>{{ synthesis }}</pre>
+                {% endif %}
+            </section>
+
+            <section class="card stack" aria-label="Gates and improvements">
+                <h2 style="margin: 0;">Gates</h2>
+                {% if publishability and publishability.gates %}
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Gate</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for k, ok in publishability.gates.items() %}
+                        <tr>
+                            <td><code>{{ k }}</code></td>
+                            <td>
+                                {% if ok %}
+                                <span class="badge good">Pass</span>
+                                {% else %}
+                                <span class="badge bad">Fail</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="muted">No gate data available.</p>
+                {% endif %}
+
+                <h2 style="margin: 0;">What to improve</h2>
+                {% if improvements and improvements|length > 0 %}
+                <ul>
+                    {% for s in improvements %}
+                    <li>{{ s }}</li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="muted">No improvement suggestions available.</p>
+                {% endif %}
+            </section>
+        </div>
+    </main>
+</body>
+
+</html>

@@ -5,137 +5,91 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Review job</title>
-    <style>
-        body {
-            font-family: ui-sans-serif, system-ui, -apple-system;
-            margin: 2rem;
-            max-width: 1100px;
-        }
-
-        .row {
-            display: flex;
-            gap: 1rem;
-            flex-wrap: wrap;
-        }
-
-        .card {
-            border: 1px solid #ddd;
-            border-radius: 10px;
-            padding: 1rem;
-            margin-bottom: 1rem;
-            flex: 1;
-            min-width: 320px;
-        }
-
-        .muted {
-            color: #666;
-        }
-
-        .error {
-            color: #b00020;
-            white-space: pre-wrap;
-        }
-
-        pre {
-            background: #0b1020;
-            color: #e8e8e8;
-            padding: 1rem;
-            border-radius: 10px;
-            overflow-x: auto;
-        }
-
-        code {
-            background: #f6f6f6;
-            padding: 0.15rem 0.3rem;
-            border-radius: 6px;
-        }
-
-        a {
-            color: #2b6cb0;
-        }
-
-        button {
-            padding: 0.6rem 1rem;
-        }
-
-        ul {
-            margin: 0.5rem 0 0 1.25rem;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/app.css" />
 </head>
 
 <body>
-    <p>
-        <a href="/">← back</a>
-        · <a href="/reviews">all reviews</a>
-    </p>
+    <header class="topbar">
+        <div class="nav" aria-label="Primary">
+            <a href="/">Home</a>
+            <a href="/papers">Papers</a>
+            <a href="/reviews">Reviews</a>
+            <a href="/feedback">Feedback</a>
+        </div>
+        <div class="muted" style="font-size: 13px;">Phase 9</div>
+    </header>
 
-    <h1>Review job</h1>
-    <p class="muted">job: <code id="job_id">{{ job.job_id }}</code></p>
+    <main class="container stack">
+        <h1 class="page-title">Review job</h1>
+        <p class="subtitle">job: <code id="job_id">{{ job.job_id }}</code></p>
 
-    <div class="row">
-        <div class="card">
-            <h2>Status</h2>
+        <div class="row">
+            <section class="card" aria-label="Job status">
+                <h2 style="margin: 0;">Status</h2>
+                <ul>
+                    <li>status: <code id="status">{{ job.status }}</code></li>
+                    <li>step: <code id="step">{{ job.step }}</code></li>
+                    <li>paper: <code id="paper">{{ job.normalized_arxiv_id or job.arxiv_id_or_url }}</code></li>
+                    <li>run: <code id="run">{{ job.current_run }}</code> / <code id="runs">{{ job.num_reviews }}</code>
+                    </li>
+                    <li>messages: <code id="messages">{{ job.messages_count }}</code></li>
+                    <li>last_agent: <code id="last_agent">{{ job.last_agent }}</code></li>
+                    <li>last_phase: <code id="last_phase">{{ job.last_phase }}</code></li>
+                </ul>
+                <p class="muted">This page auto-updates every ~2s.</p>
+                <p id="err" class="error" style="display:none;"></p>
+            </section>
+
+            <section class="card" aria-label="Persisted reviews">
+                <h2 style="margin: 0;">Persisted reviews</h2>
+                {% if job.persisted_reviews and job.persisted_reviews|length > 0 %}
+                <ul id="persisted_list">
+                    {% for r in job.persisted_reviews %}
+                    <li>
+                        run <code>{{ r.run }}</code>:
+                        {% if r.review_id %}
+                        <a href="/reviews/{{ r.review_id }}">{{ r.review_id }}</a>
+                        {% else %}
+                        <span class="muted">{{ r.error }}</span>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="muted" id="persisted_empty">None yet.</p>
+                <ul id="persisted_list" style="display:none;"></ul>
+                {% endif %}
+            </section>
+        </div>
+
+        <section class="card" aria-label="Artifacts">
+            <h2 style="margin: 0;">Artifacts</h2>
+            {% if job.artifacts and job.artifacts|length > 0 %}
+            {% for a in job.artifacts %}
+            <h3 style="margin-bottom: 0.25rem;">Run {{ a.run }}</h3>
             <ul>
-                <li>status: <code id="status">{{ job.status }}</code></li>
-                <li>step: <code id="step">{{ job.step }}</code></li>
-                <li>paper: <code id="paper">{{ job.normalized_arxiv_id or job.arxiv_id_or_url }}</code></li>
-                <li>run: <code id="run">{{ job.current_run }}</code> / <code id="runs">{{ job.num_reviews }}</code></li>
-                <li>messages: <code id="messages">{{ job.messages_count }}</code></li>
-                <li>last_agent: <code id="last_agent">{{ job.last_agent }}</code></li>
-                <li>last_phase: <code id="last_phase">{{ job.last_phase }}</code></li>
+                <li><a href="/download/{{ a.report_md }}">{{ a.report_md }}</a></li>
+                {% if a.claims_json %}<li><a href="/download/{{ a.claims_json }}">{{ a.claims_json }}</a></li>{% endif
+                %}
+                {% if a.summary_json %}<li><a href="/download/{{ a.summary_json }}">{{ a.summary_json }}</a></li>{%
+                endif %}
             </ul>
-            <p class="muted">This page auto-updates every ~2s.</p>
-            <p id="err" class="error" style="display:none;"></p>
-        </div>
-
-        <div class="card">
-            <h2>Persisted reviews</h2>
-            {% if job.persisted_reviews and job.persisted_reviews|length > 0 %}
-            <ul id="persisted_list">
-                {% for r in job.persisted_reviews %}
-                <li>
-                    run <code>{{ r.run }}</code>:
-                    {% if r.review_id %}
-                    <a href="/reviews/{{ r.review_id }}">{{ r.review_id }}</a>
-                    {% else %}
-                    <span class="muted">{{ r.error }}</span>
-                    {% endif %}
-                </li>
-                {% endfor %}
-            </ul>
+            <details>
+                <summary>Report preview</summary>
+                <pre>{{ a.report_preview }}</pre>
+            </details>
+            {% endfor %}
             {% else %}
-            <p class="muted" id="persisted_empty">None yet.</p>
-            <ul id="persisted_list" style="display:none;"></ul>
+            <p class="muted">No artifacts yet.</p>
             {% endif %}
-        </div>
-    </div>
+        </section>
 
-    <div class="card">
-        <h2>Artifacts</h2>
-        {% if job.artifacts and job.artifacts|length > 0 %}
-        {% for a in job.artifacts %}
-        <h3 style="margin-bottom: 0.25rem;">Run {{ a.run }}</h3>
-        <ul>
-            <li><a href="/download/{{ a.report_md }}">{{ a.report_md }}</a></li>
-            {% if a.claims_json %}<li><a href="/download/{{ a.claims_json }}">{{ a.claims_json }}</a></li>{% endif %}
-            {% if a.summary_json %}<li><a href="/download/{{ a.summary_json }}">{{ a.summary_json }}</a></li>{% endif %}
-        </ul>
-        <details>
-            <summary>Report preview</summary>
-            <pre>{{ a.report_preview }}</pre>
-        </details>
-        {% endfor %}
-        {% else %}
-        <p class="muted">No artifacts yet.</p>
-        {% endif %}
-    </div>
-
-    <div class="card">
-        <h2>Adjudication log</h2>
-        <p class="muted">Append-only job events (Supabase). Shows while adjudicating.</p>
-        <pre id="events">(loading)</pre>
-    </div>
+        <section class="card" aria-label="Adjudication log">
+            <h2 style="margin: 0;">Adjudication log</h2>
+            <p class="muted">Append-only job events (Supabase). Shows while adjudicating.</p>
+            <pre id="events">(loading)</pre>
+        </section>
+    </main>
 
     <script>
         const jobId = document.getElementById('job_id').innerText;

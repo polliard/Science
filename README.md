@@ -10,7 +10,7 @@ See [SCIENTIFIC_PRINCIPLES.md](SCIENTIFIC_PRINCIPLES.md) for the complete consti
 
 Key tenets:
 1. **Methodological Neutrality** — Non-mainstream hypotheses receive equal evaluation
-2. **Separation of Concerns** — Methodology ≠ Conclusions ≠ Implications  
+2. **Separation of Concerns** — Methodology ≠ Conclusions ≠ Implications
 3. **Anti-Orthodoxy Bias Control** — "Contradicts consensus" triggers scrutiny, not rejection
 4. **COI Awareness** — Surface conflicts of interest without guilt-by-association
 5. **Progress-of-Science Test** — Value scientific contributions even when wrong
@@ -141,6 +141,21 @@ uv run python -m scientific_judgment_mcp.server
 
 ## Usage
 
+### Web UI configuration (.env)
+
+The FastAPI web UI (run via `python run_web.py`) reads these optional `.env` settings:
+
+- `SCIJUDGE_MIN_FINAL_REVIEWS` (default: `5`): minimum independent reviews required for a **Final** publishability decision.
+- `SCIJUDGE_MAX_ADDITIONAL_REVIEWS_REQUEST` (default: `5`): maximum *additional* reviews a user can request at once from the `/papers` UI.
+- `SCIJUDGE_MAX_REVIEWS_PER_JOB` (default: `6`): hard cap on `num_reviews` per `/review` job.
+- `SCIJUDGE_LOCK_REVIEW_AFTER_FINAL` (default: `true`): when `true`, disables re-review once a paper has at least `SCIJUDGE_MIN_FINAL_REVIEWS` persisted reviews (unless `force=true` is submitted).
+
+Defaults for the home page form:
+
+- `SCIJUDGE_DEFAULT_NUM_REVIEWS` (default: `2`): default value shown for “Independent review runs”.
+- `SCIJUDGE_DEFAULT_ALLOW_INSECURE_TLS` (default: `false`): default checked state for “Allow insecure TLS”.
+- `SCIJUDGE_DEFAULT_PERSIST_TO_SUPABASE` (default: `true`): default checked state for “Persist to Supabase” (only applies when Supabase is configured).
+
 ### Testing Diagnostic Tools
 
 ```bash
@@ -208,13 +223,13 @@ Multi-axis scoring preserves information:
 
 ## Failure Modes & Safeguards
 
-| Failure Mode | Detection | Mitigation |
-|--------------|-----------|------------|
-| Consensus bias | Paradigm Challenger agent silent | Moderator enforces participation |
-| COI used to dismiss | Incentives Analyst overstepping | Principles violation alert |
-| Methodological vs. ideological critique conflation | Moderator review | Transcript audit |
-| Pile-on behavior | Multiple agents using consensus arguments | Moderator intervention |
-| Certainty overstatement | Lack of uncertainty caveats | Final report requires limitations section |
+| Failure Mode                                       | Detection                                 | Mitigation                                |
+| -------------------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| Consensus bias                                     | Paradigm Challenger agent silent          | Moderator enforces participation          |
+| COI used to dismiss                                | Incentives Analyst overstepping           | Principles violation alert                |
+| Methodological vs. ideological critique conflation | Moderator review                          | Transcript audit                          |
+| Pile-on behavior                                   | Multiple agents using consensus arguments | Moderator intervention                    |
+| Certainty overstatement                            | Lack of uncertainty caveats               | Final report requires limitations section |
 
 ---
 
@@ -222,9 +237,9 @@ Multi-axis scoring preserves information:
 
 Each phase must demonstrate:
 
-✅ **Functional**: Components respond as specified  
-✅ **Principled**: Outputs conform to SCIENTIFIC_PRINCIPLES.md  
-✅ **Auditable**: All reasoning and tool calls logged  
+✅ **Functional**: Components respond as specified
+✅ **Principled**: Outputs conform to SCIENTIFIC_PRINCIPLES.md
+✅ **Auditable**: All reasoning and tool calls logged
 ✅ **Reproducible**: Same inputs yield same outputs (given deterministic LLM)
 
 ---
@@ -260,5 +275,5 @@ For questions about design decisions or principle interpretation, open an issue 
 
 ---
 
-**Version**: 0.1.0 (Phase 1 in progress)  
+**Version**: 0.1.0 (Phase 1 in progress)
 **Last Updated**: 2026-01-30

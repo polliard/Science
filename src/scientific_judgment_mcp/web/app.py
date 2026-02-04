@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from scientific_judgment_mcp.feedback import (
@@ -86,9 +87,192 @@ TRUSTSTORE_INJECTED = _maybe_inject_truststore()
 REPORTS_DIR = Path(os.getenv("SCIJUDGE_REPORTS_DIR", "reports")).resolve()
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        v = os.getenv(name)
+        if v is None:
+            return int(default)
+        return int(str(v).strip())
+    except Exception:
+        return int(default)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return bool(default)
+    return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+# Adjudication/publishability settings (configurable via .env)
+MIN_FINAL_REVIEWS = max(1, _env_int("SCIJUDGE_MIN_FINAL_REVIEWS", 5))
+MAX_REVIEWS_PER_JOB = max(1, _env_int("SCIJUDGE_MAX_REVIEWS_PER_JOB", 6))
+MAX_ADDITIONAL_REVIEWS_REQUEST = max(1, _env_int("SCIJUDGE_MAX_ADDITIONAL_REVIEWS_REQUEST", 5))
+LOCK_REVIEW_AFTER_FINAL = _env_bool("SCIJUDGE_LOCK_REVIEW_AFTER_FINAL", True)
+
+# Web UI defaults (configurable via .env)
+DEFAULT_NUM_REVIEWS = max(1, min(MAX_REVIEWS_PER_JOB, _env_int("SCIJUDGE_DEFAULT_NUM_REVIEWS", 2)))
+DEFAULT_ALLOW_INSECURE_TLS = _env_bool("SCIJUDGE_DEFAULT_ALLOW_INSECURE_TLS", False)
+DEFAULT_PERSIST_TO_SUPABASE = _env_bool("SCIJUDGE_DEFAULT_PERSIST_TO_SUPABASE", True)
+
+
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 app = FastAPI(title="Scientific Judgment (Phase 9)")
+
+STATIC_DIR = BASE_DIR / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+def _publishability_from_verdict(verdict: dict[str, Any] | None) -> dict[str, Any]:
+    pub = None
+    if isinstance(verdict, dict):
+        pub = verdict.get("publishability")
+    if pub is None:
+        pub = evaluate_publishability(verdict).to_dict()
+    return pub if isinstance(pub, dict) else evaluate_publishability(None).to_dict()
+
+
+def _publishability_label(pub: dict[str, Any] | None) -> str:
+    if not isinstance(pub, dict):
+        return "Unverified"
+    decision = str(pub.get("decision") or "").strip().lower()
+    if decision == "publishable" or bool(pub.get("publishable")):
+        return "Publishable"
+    if decision == "revise_resubmit":
+        return "Revise & resubmit"
+    if decision == "reject":
+        return "Not publishable"
+    if decision == "unverified":
+        return "Unverified"
+    return "Not publishable"
+
+
+def _publishability_summary(pub: dict[str, Any] | None, *, max_reasons: int = 2) -> str:
+    if not isinstance(pub, dict):
+        return "No publishability result available"
+    reasons = pub.get("reasons")
+    if isinstance(reasons, list):
+        cleaned = [str(x).strip() for x in reasons if str(x).strip()]
+        if cleaned:
+            return "; ".join(cleaned[: int(max_reasons)])
+    return "No specific reasons recorded"
+
+
+def _publishability_improvements(pub: dict[str, Any] | None) -> list[str]:
+    if not isinstance(pub, dict):
+        return ["Run a review to generate a verdict first."]
+
+    decision = str(pub.get("decision") or "").strip().lower()
+    if decision == "unverified":
+        return ["Run a review to generate a verdict first."]
+
+    gates = pub.get("gates") if isinstance(pub.get("gates"), dict) else {}
+    suggestions: list[str] = []
+
+    if gates.get("methodological_soundness>=3") is False:
+        suggestions.extend(
+            [
+                "Tighten methodology: clarify design choices, controls, and assumptions.",
+                "Add missing baselines/ablations and justify hyperparameters.",
+                "Report robustness checks and sensitivity analyses.",
+            ]
+        )
+    if gates.get("evidence_strength>=3") is False:
+        suggestions.extend(
+            [
+                "Strengthen evidence: add experiments, larger datasets, or stronger evaluation.",
+                "Include statistical tests/uncertainty (CIs, power, multiple comparisons where relevant).",
+                "Provide reproducibility details (data splits, code, seeds, preprocessing).",
+            ]
+        )
+    if gates.get("risk_of_overreach<=3") is False:
+        suggestions.extend(
+            [
+                "Reduce overreach: narrow claims to what results support.",
+                "Add a limitations section and discuss external validity/generalization.",
+                "Add targeted experiments that directly test the strongest claims.",
+            ]
+        )
+
+    if not suggestions and decision != "publishable":
+        suggestions.append("Address the listed reasons, then re-run the review.")
+
+    # De-dup while keeping order
+    seen: set[str] = set()
+    out: list[str] = []
+    for s in suggestions:
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+def _finality_label(review_count: int) -> str:
+    return "Final" if int(review_count) >= int(MIN_FINAL_REVIEWS) else "Interim"
+
+
+def _decision_badge_class(decision_label: str) -> str:
+    if decision_label == "Publishable":
+        return "good"
+    if decision_label == "Revise & resubmit":
+        return "mid"
+    if decision_label == "Unverified":
+        return "mid"
+    return "bad"
+
+
+def _aggregate_verdict_dimensions(verdicts: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Aggregate multiple verdict dicts into a single representative verdict.
+
+    Returns:
+      - verdict_for_gate_eval: dict suitable for evaluate_publishability (ints 1-5)
+      - stats: per-dimension mean/min/max
+    """
+
+    dim_keys = [
+        "methodological_soundness",
+        "evidence_strength",
+        "novelty_value",
+        "scientific_contribution",
+        "risk_of_overreach",
+    ]
+
+    stats: dict[str, Any] = {}
+    verdict_for_gate_eval: dict[str, Any] = {}
+
+    for k in dim_keys:
+        vals: list[int] = []
+        for v in verdicts:
+            if not isinstance(v, dict):
+                continue
+            x = v.get(k)
+            if isinstance(x, int):
+                vals.append(int(x))
+        if not vals:
+            continue
+        mean = sum(vals) / len(vals)
+        stats[k] = {
+            "mean": round(mean, 2),
+            "min": min(vals),
+            "max": max(vals),
+            "n": len(vals),
+            "values": vals,
+        }
+        verdict_for_gate_eval[k] = int(round(mean))
+
+    # Rationale for aggregated verdict: provide a concise, auditable summary.
+    if stats:
+        lines = ["Aggregated across multiple independent reviews (mean/min/max):"]
+        for k in dim_keys:
+            if k not in stats:
+                continue
+            s = stats[k]
+            lines.append(f"- {k}: mean={s['mean']}, min={s['min']}, max={s['max']}, n={s['n']}")
+        verdict_for_gate_eval["rationale"] = "\n".join(lines)
+
+    return verdict_for_gate_eval, stats
 
 
 @dataclass
@@ -240,6 +424,11 @@ async def index(request: Request) -> Any:
             "supabase_configured": _repo is not None,
             "supabase_error": repo_err,
             "dotenv_loaded_from": DOTENV_LOADED_FROM,
+            "default_num_reviews": int(DEFAULT_NUM_REVIEWS),
+            "max_reviews_per_job": int(MAX_REVIEWS_PER_JOB),
+            "default_allow_insecure_tls": bool(DEFAULT_ALLOW_INSECURE_TLS),
+            "default_persist_to_supabase": bool(DEFAULT_PERSIST_TO_SUPABASE),
+            "min_final_reviews": int(MIN_FINAL_REVIEWS),
         },
     )
 
@@ -261,11 +450,66 @@ async def list_reviews(request: Request) -> Any:
 async def list_papers(request: Request) -> Any:
     repo = _require_repo()
     papers = repo.list_papers_with_reviews(limit=50)
+
+    # Collect up to MIN_FINAL_REVIEWS most recent review IDs for each paper.
+    all_review_ids: list[str] = []
+    for p in papers:
+        rids = p.get("recent_review_ids")
+        if isinstance(rids, list):
+            for rid in rids[: int(MIN_FINAL_REVIEWS)]:
+                if rid:
+                    all_review_ids.append(str(rid))
+        else:
+            rid = p.get("latest_review_id")
+            if rid:
+                all_review_ids.append(str(rid))
+
+    verdict_rows = repo.get_latest_verdict_versions_for_reviews(review_ids=list({x for x in all_review_ids if x}))
+
+    for p in papers:
+        review_count = int(p.get("review_count") or 0)
+        finality = _finality_label(review_count)
+
+        # Pull the relevant verdict dicts.
+        rids = p.get("recent_review_ids") if isinstance(p.get("recent_review_ids"), list) else []
+        rids = [str(x) for x in rids if str(x).strip()][: int(MIN_FINAL_REVIEWS)]
+        verdict_dicts: list[dict[str, Any]] = []
+        for rid in rids:
+            row = verdict_rows.get(str(rid))
+            verdict = (row or {}).get("verdict") if isinstance(row, dict) else None
+            if isinstance(verdict, dict):
+                verdict_dicts.append(verdict)
+
+        # Interim: use latest verdict (first in rids).
+        interim_verdict = verdict_dicts[0] if verdict_dicts else None
+
+        if finality == "Final" and verdict_dicts:
+            agg_verdict, agg_stats = _aggregate_verdict_dimensions(verdict_dicts)
+            pub = _publishability_from_verdict(agg_verdict)
+            p["publishability_aggregate_stats"] = agg_stats
+        else:
+            pub = _publishability_from_verdict(interim_verdict)
+            p["publishability_aggregate_stats"] = {}
+
+        decision_label = _publishability_label(pub)
+        p["publishability"] = pub
+        p["publishability_decision_label"] = decision_label
+        p["publishability_badge_class"] = _decision_badge_class(decision_label)
+        p["publishability_finality"] = finality
+        p["publishability_label"] = f"{finality} — {decision_label}"
+        p["publishability_summary"] = _publishability_summary(pub)
+
+        remaining = max(0, int(MIN_FINAL_REVIEWS) - review_count)
+        p["remaining_reviews_to_final"] = remaining
+        p["can_request_more_reviews"] = remaining > 0
+        p["max_additional_reviews"] = min(remaining, int(MAX_ADDITIONAL_REVIEWS_REQUEST))
+
     return templates.TemplateResponse(
         "papers.html",
         {
             "request": request,
             "papers": papers,
+            "min_final_reviews": int(MIN_FINAL_REVIEWS),
         },
     )
 
@@ -275,12 +519,106 @@ async def paper_detail(request: Request, paper_id: str) -> Any:
     repo = _require_repo()
     paper = repo.get_paper(paper_id)
     reviews = repo.list_reviews_for_paper(paper_id=paper_id, limit=50)
+
+    latest_review_id = str(reviews[0].get("id")) if reviews else None
+    latest_pub = None
+    if latest_review_id:
+        verdict_row = repo.get_latest_verdict_version(latest_review_id)
+        verdict = (verdict_row or {}).get("verdict") if isinstance(verdict_row, dict) else None
+        verdict_dict = verdict if isinstance(verdict, dict) else None
+        latest_pub = _publishability_from_verdict(verdict_dict)
+
     return templates.TemplateResponse(
         "paper_detail.html",
         {
             "request": request,
             "paper": paper,
             "reviews": reviews,
+            "latest_review_id": latest_review_id,
+            "latest_publishability": latest_pub,
+            "latest_publishability_label": _publishability_label(latest_pub),
+            "latest_publishability_summary": _publishability_summary(latest_pub),
+            "min_final_reviews": int(MIN_FINAL_REVIEWS),
+            "review_count": len(reviews or []),
+            "publishability_finality": _finality_label(len(reviews or [])),
+            "remaining_reviews_to_final": max(0, int(MIN_FINAL_REVIEWS) - len(reviews or [])),
+            "max_additional_reviews": min(max(0, int(MIN_FINAL_REVIEWS) - len(reviews or [])), int(MAX_ADDITIONAL_REVIEWS_REQUEST)),
+        },
+    )
+
+
+@app.get("/papers/{paper_id}/publishability", response_class=HTMLResponse)
+async def paper_publishability_result(request: Request, paper_id: str, review_id: str | None = None) -> Any:
+    repo = _require_repo()
+    paper = repo.get_paper(paper_id)
+
+    # Determine the most recent reviews for this paper.
+    recent_reviews = repo.list_reviews_for_paper(paper_id=paper_id, limit=int(MIN_FINAL_REVIEWS))
+    recent_review_ids = [str(r.get("id")) for r in (recent_reviews or []) if r.get("id")]
+    review_count_at_least = len(recent_review_ids)
+
+    finality = _finality_label(review_count_at_least)
+    remaining = max(0, int(MIN_FINAL_REVIEWS) - review_count_at_least)
+
+    chosen_review_id = None
+    if review_id and str(review_id).strip():
+        chosen_review_id = str(review_id).strip()
+    else:
+        chosen_review_id = recent_review_ids[0] if recent_review_ids else None
+
+    verdict_rows = repo.get_latest_verdict_versions_for_reviews(review_ids=recent_review_ids)
+    verdict_dicts: list[dict[str, Any]] = []
+    for rid in recent_review_ids:
+        row = verdict_rows.get(str(rid))
+        v = (row or {}).get("verdict") if isinstance(row, dict) else None
+        if isinstance(v, dict):
+            verdict_dicts.append(v)
+
+    chosen_verdict_row = verdict_rows.get(str(chosen_review_id)) if chosen_review_id else None
+    synthesis = (chosen_verdict_row or {}).get("synthesis") if isinstance(chosen_verdict_row, dict) else None
+    verdict_version = (chosen_verdict_row or {}).get("version") if isinstance(chosen_verdict_row, dict) else None
+
+    aggregate_stats: dict[str, Any] = {}
+    if finality == "Final" and verdict_dicts:
+        agg_verdict, aggregate_stats = _aggregate_verdict_dimensions(verdict_dicts)
+        pub = _publishability_from_verdict(agg_verdict)
+        dims = _extract_verdict_dimensions(agg_verdict)
+        rationale = agg_verdict.get("rationale") if isinstance(agg_verdict.get("rationale"), str) else ""
+    else:
+        interim_verdict = verdict_dicts[0] if verdict_dicts else None
+        pub = _publishability_from_verdict(interim_verdict)
+        dims = _extract_verdict_dimensions(interim_verdict or {}) if isinstance(interim_verdict, dict) else {}
+        rationale = interim_verdict.get("rationale") if isinstance(interim_verdict, dict) and isinstance(interim_verdict.get("rationale"), str) else ""
+
+    decision_label = _publishability_label(pub)
+    full_label = f"{finality} — {decision_label}"
+    summary = _publishability_summary(pub, max_reasons=6)
+    improvements = _publishability_improvements(pub)
+
+    synthesis_preview = ""
+    if isinstance(synthesis, str):
+        synthesis_preview = synthesis.strip().replace("\r\n", "\n").replace("\r", "\n")
+
+    return templates.TemplateResponse(
+        "paper_publishability.html",
+        {
+            "request": request,
+            "paper": paper,
+            "review_id": chosen_review_id,
+            "verdict_version": verdict_version,
+            "publishability": pub,
+            "publishability_label": full_label,
+            "publishability_decision_label": decision_label,
+            "publishability_finality": finality,
+            "publishability_summary": summary,
+            "improvements": improvements,
+            "dimensions": dims,
+            "rationale": rationale,
+            "synthesis": synthesis_preview,
+            "min_final_reviews": int(MIN_FINAL_REVIEWS),
+            "remaining_reviews_to_final": remaining,
+            "max_additional_reviews": min(remaining, int(MAX_ADDITIONAL_REVIEWS_REQUEST)),
+            "aggregate_stats": aggregate_stats,
         },
     )
 
@@ -384,6 +722,39 @@ async def compare_paper_reviews(request: Request, paper_id: str, include_reviewe
             except Exception:
                 reviewer_snips = []
 
+        evidence_audit_summary = None
+        try:
+            arow = repo.get_latest_review_artifact(review_id=str(rid), artifact_type="evidence_audit_v1")
+            artifact = (arow or {}).get("artifact") if isinstance(arow, dict) else None
+            if isinstance(artifact, dict):
+                qv = artifact.get("quote_verification") if isinstance(artifact.get("quote_verification"), dict) else {}
+                prisma = artifact.get("prisma_checklist") if isinstance(artifact.get("prisma_checklist"), list) else []
+                missing = 0
+                partial = 0
+                present = 0
+                for p in prisma:
+                    if not isinstance(p, dict):
+                        continue
+                    st = str(p.get("status") or "").lower()
+                    if st == "missing":
+                        missing += 1
+                    elif st == "partial":
+                        partial += 1
+                    elif st == "present":
+                        present += 1
+                evidence_audit_summary = {
+                    "paper_type": artifact.get("paper_type"),
+                    "quote_pass_rate": (qv or {}).get("pass_rate"),
+                    "grounded": (qv or {}).get("grounded"),
+                    "ungrounded": (qv or {}).get("ungrounded"),
+                    "prisma_present": present,
+                    "prisma_partial": partial,
+                    "prisma_missing": missing,
+                    "prisma_total": len(prisma),
+                }
+        except Exception:
+            evidence_audit_summary = None
+
         synthesis = verdict_row.get("synthesis")
         synthesis_preview = ""
         if isinstance(synthesis, str):
@@ -399,6 +770,7 @@ async def compare_paper_reviews(request: Request, paper_id: str, include_reviewe
                 "rationale": verdict_dict.get("rationale") if isinstance(verdict_dict.get("rationale"), str) else "",
                 "synthesis_preview": synthesis_preview,
                 "reviewers": reviewer_snips,
+                "evidence_audit": evidence_audit_summary,
             }
         )
 
@@ -465,12 +837,43 @@ async def run_review(
     allow_insecure_tls: bool = Form(False),
     persist_to_supabase: bool = Form(False),
     num_reviews: int = Form(2),
+    force: bool = Form(False),
 ) -> Any:
     # This route enqueues a background job so the browser connection doesn't time out.
     # Results are available under /jobs/{job_id}.
     job_id = str(uuid4())
-    n = int(num_reviews) if int(num_reviews) > 0 else 1
-    n = min(max(n, 1), 6)
+    requested = int(num_reviews) if int(num_reviews) > 0 else 1
+    n = min(max(requested, 1), int(MAX_REVIEWS_PER_JOB))
+
+    normalized = _normalize_arxiv_id_or_url(arxiv_id_or_url)
+    # If this run will persist, enforce the "min reviews for final adjudication" lock.
+    # Users can override with force=true (intended for updated papers).
+    if bool(persist_to_supabase) and LOCK_REVIEW_AFTER_FINAL and not bool(force):
+        repo = _maybe_get_repo()
+        if repo is not None:
+            try:
+                pid = repo.find_paper_id_by_arxiv_id(arxiv_id=normalized)
+                if pid:
+                    existing = repo.list_reviews_for_paper(paper_id=str(pid), limit=int(MIN_FINAL_REVIEWS))
+                    if len(existing) >= int(MIN_FINAL_REVIEWS):
+                        return templates.TemplateResponse(
+                            "message.html",
+                            {
+                                "request": request,
+                                "title": "Review disabled",
+                                "message": f"This paper already has >= {int(MIN_FINAL_REVIEWS)} reviews and is Final-adjudicated. Re-review is disabled unless the paper is updated.",
+                                "back_href": f"/papers/{pid}",
+                                "back_label": "Back to paper",
+                            },
+                            status_code=409,
+                        )
+
+                    remaining = max(0, int(MIN_FINAL_REVIEWS) - len(existing))
+                    if remaining > 0:
+                        n = min(n, remaining)
+            except Exception:
+                # Best-effort guard only; never block if something goes wrong.
+                pass
 
     job = ReviewJob(
         job_id=job_id,

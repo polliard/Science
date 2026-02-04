@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title or 'Message' }}</title>
+    <link rel="stylesheet" href="/static/app.css" />
+</head>
+
+<body>
+    <header class="topbar">
+        <div class="nav" aria-label="Primary">
+            <a href="{{ back_href or '/' }}">← {{ back_label or 'back' }}</a>
+        </div>
+        <div class="muted" style="font-size: 13px;">Status</div>
+    </header>
+
+    <main class="container">
+        <section class="card stack" aria-label="Message">
+            <h1 class="page-title">{{ title or 'Message' }}</h1>
+            <p class="muted" style="white-space: pre-wrap; margin: 0;">{{ message or '' }}</p>
+        </section>
+    </main>
+</body>
+
+</html>

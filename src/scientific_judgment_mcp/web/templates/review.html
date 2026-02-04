@@ -5,106 +5,69 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Review</title>
-    <style>
-        body {
-            font-family: ui-sans-serif, system-ui, -apple-system;
-            margin: 2rem;
-            max-width: 1100px;
-        }
-
-        .row {
-            display: flex;
-            gap: 1rem;
-            flex-wrap: wrap;
-        }
-
-        .card {
-            border: 1px solid #ddd;
-            border-radius: 10px;
-            padding: 1rem;
-            margin-bottom: 1rem;
-            flex: 1;
-            min-width: 320px;
-        }
-
-        .muted {
-            color: #666;
-        }
-
-        .error {
-            color: #b00020;
-            white-space: pre-wrap;
-        }
-
-        pre {
-            background: #0b1020;
-            color: #e8e8e8;
-            padding: 1rem;
-            border-radius: 10px;
-            overflow-x: auto;
-        }
-
-        code {
-            background: #f6f6f6;
-            padding: 0.15rem 0.3rem;
-            border-radius: 6px;
-        }
-
-        a {
-            color: #2b6cb0;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/app.css" />
 </head>
 
 <body>
-    <p><a href="/">← back</a></p>
+    <header class="topbar">
+        <div class="nav" aria-label="Primary">
+            <a href="/">Home</a>
+            <a href="/papers">Papers</a>
+            <a href="/reviews">Reviews</a>
+            <a href="/feedback">Feedback</a>
+        </div>
+        <div class="muted" style="font-size: 13px;">Phase 9</div>
+    </header>
 
-    <h1>Review complete</h1>
-    <p class="muted">Input: <code>{{ arxiv_id_or_url }}</code></p>
+    <main class="container stack">
+        <h1 class="page-title">Review complete</h1>
+        <p class="subtitle">Input: <code>{{ arxiv_id_or_url }}</code></p>
 
-    <div class="row">
-        <div class="card">
-            <h2>Downloads</h2>
+        <div class="row">
+            <section class="card" aria-label="Downloads">
+                <h2 style="margin: 0;">Downloads</h2>
+                <ul>
+                    <li><a href="/download/{{ report_md }}">{{ report_md }}</a></li>
+                    {% if claims_json %}<li><a href="/download/{{ claims_json }}">{{ claims_json }}</a></li>{% endif %}
+                    {% if summary_json %}<li><a href="/download/{{ summary_json }}">{{ summary_json }}</a></li>{% endif
+                    %}
+                </ul>
+                <p class="muted">If these links look wrong, the UI is probably not pointing at the artifacts you
+                    expect; it currently selects the newest files in <code>reports/</code>.</p>
+            </section>
+
+            <section class="card" aria-label="Persistence">
+                <h2 style="margin: 0;">Persistence</h2>
+                {% if persist_to_supabase %}
+                {% if persisted %}
+                <p>Stored review bundle.</p>
+                {% if persisted_review_id %}
+                <p><a href="/reviews/{{ persisted_review_id }}">View persisted review</a></p>
+                {% endif %}
+                <pre>{{ persisted | tojson }}</pre>
+                {% else %}
+                <p class="error">Persist failed:
+                    {{ persist_error }}</p>
+                {% endif %}
+                {% else %}
+                <p class="muted">Not persisted (checkbox unchecked).</p>
+                {% endif %}
+            </section>
+        </div>
+
+        <section class="card" aria-label="Report preview">
+            <h2 style="margin: 0;">Report preview</h2>
+            <pre>{{ report_preview }}</pre>
+        </section>
+
+        <section class="card" aria-label="Run metadata">
+            <h2 style="margin: 0;">Run metadata</h2>
             <ul>
-                <li><a href="/download/{{ report_md }}">{{ report_md }}</a></li>
-                {% if claims_json %}<li><a href="/download/{{ claims_json }}">{{ claims_json }}</a></li>{% endif %}
-                {% if summary_json %}<li><a href="/download/{{ summary_json }}">{{ summary_json }}</a></li>{% endif %}
+                <li>allow_insecure_tls: <code>{{ allow_insecure_tls }}</code></li>
             </ul>
-            <p class="muted">If these links look wrong, the UI is probably not pointing at the artifacts you expect; it
-                currently selects the newest files in <code>reports/</code>.</p>
-        </div>
-
-        <div class="card">
-            <h2>Persistence</h2>
-            {% if persist_to_supabase %}
-            {% if persisted %}
-            <p>Stored review bundle.</p>
-            {% if persisted_review_id %}
-            <p><a href="/reviews/{{ persisted_review_id }}">View persisted review</a></p>
-            {% endif %}
-            <pre>{{ persisted | tojson }}</pre>
-            {% else %}
-            <p class="error">Persist failed:
-                {{ persist_error }}</p>
-            {% endif %}
-            {% else %}
-            <p class="muted">Not persisted (checkbox unchecked).</p>
-            {% endif %}
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>Report preview</h2>
-        <pre>{{ report_preview }}</pre>
-    </div>
-
-    <div class="card">
-        <h2>Run metadata</h2>
-        <ul>
-            <li>allow_insecure_tls: <code>{{ allow_insecure_tls }}</code></li>
-        </ul>
-        <p class="muted">Model divergence and tool limitations are recorded inside the report.</p>
-    </div>
+            <p class="muted">Model divergence and tool limitations are recorded inside the report.</p>
+        </section>
+    </main>
 </body>
 
 </html>

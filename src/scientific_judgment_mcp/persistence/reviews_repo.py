@@ -70,6 +70,22 @@ class ReviewsRepository:
             raise RuntimeError("Failed to insert paper")
         return inserted[0]["id"]
 
+    def find_paper_id_by_arxiv_id(self, *, arxiv_id: str) -> str | None:
+        rows = (
+            self.client.table("papers")
+            .select("id")
+            .eq("arxiv_id", str(arxiv_id).strip())
+            .limit(1)
+            .execute()
+        ).data
+        if not rows:
+            return None
+        first = rows[0] if isinstance(rows, list) else None
+        if not isinstance(first, dict):
+            return None
+        pid = first.get("id")
+        return str(pid) if pid else None
+
     def create_review(self, *, paper_id: str, agent_model_configs: dict[str, Any]) -> str:
         review_id = str(uuid4())
         row = {
@@ -165,6 +181,52 @@ class ReviewsRepository:
             .execute()
         ).data
         return rows[0] if rows else None
+
+    def get_latest_verdict_versions_for_reviews(self, *, review_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Return latest verdict version row per review_id.
+
+        This is a best-effort helper for UIs so they can avoid N+1 requests.
+        """
+
+        review_ids_clean = [str(rid) for rid in (review_ids or []) if str(rid).strip()]
+        if not review_ids_clean:
+            return {}
+
+        rows = self._best_effort(
+            lambda: self.client.table("verdict_versions")
+            .select("id, review_id, version, verdict, synthesis, created_at")
+            .in_("review_id", review_ids_clean)
+            .limit(5000)
+            .execute()
+            .data
+        )
+        if not rows or not isinstance(rows, list):
+            return {}
+
+        best: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            rid = r.get("review_id")
+            if not rid:
+                continue
+            try:
+                v = int(r.get("version") or 0)
+            except Exception:
+                v = 0
+
+            prev = best.get(str(rid))
+            if prev is None:
+                best[str(rid)] = r
+                continue
+            try:
+                pv = int(prev.get("version") or 0)
+            except Exception:
+                pv = 0
+            if v > pv:
+                best[str(rid)] = r
+
+        return best
 
     def list_agent_message_snippets(
         self,
@@ -394,11 +456,20 @@ class ReviewsRepository:
         counts: dict[str, int] = {}
         latest_review: dict[str, str] = {}
         latest_created_at: dict[str, str] = {}
+        recent_review_ids: dict[str, list[str]] = {}
         for r in recent_reviews:
             pid = r.get("paper_id")
             if not pid:
                 continue
             counts[pid] = counts.get(pid, 0) + 1
+            rid = r.get("id")
+            if rid:
+                bucket = recent_review_ids.get(pid)
+                if bucket is None:
+                    bucket = []
+                    recent_review_ids[pid] = bucket
+                if len(bucket) < 5:
+                    bucket.append(str(rid))
             # recent_reviews is ordered desc, so first seen is latest
             if pid not in latest_review:
                 latest_review[pid] = r.get("id")
@@ -419,6 +490,7 @@ class ReviewsRepository:
                     "review_count": counts.get(pid, 0),
                     "latest_review_id": latest_review.get(pid),
                     "latest_review_created_at": latest_created_at.get(pid),
+                    "recent_review_ids": recent_review_ids.get(pid, []),
                 }
             )
 
