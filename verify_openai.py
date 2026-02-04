@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any, cast
 
 from dotenv import load_dotenv
 
@@ -23,6 +24,16 @@ def main() -> int:
         print(f"dotenv: loaded {env_path}")
     else:
         print(f"dotenv: not found at {env_path} (continuing)")
+
+    # Prefer OS trust store (macOS Keychain / Windows cert store) when available.
+    # This avoids TLS failures in environments with custom root CAs.
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+        print("tls: truststore injected (using OS trust store)")
+    except Exception:
+        print("tls: truststore not available (using default CA bundle)")
 
     key = os.getenv("OPENAI_API_KEY")
     print(f"OPENAI_API_KEY set: {bool(key)}")
@@ -37,7 +48,12 @@ def main() -> int:
         from langchain_openai import ChatOpenAI
 
         model = os.getenv("SCIJUDGE_OPENAI_MODEL", "gpt-4o-mini")
-        llm = ChatOpenAI(model=model, temperature=0, max_tokens=1, timeout=30)
+        llm = cast(Any, ChatOpenAI)(
+            model=model,
+            temperature=0,
+            max_tokens=1,
+            timeout=30,
+        )
         _ = llm.invoke("ping")
         print(f"✅ OpenAI call succeeded (model={model})")
         return 0

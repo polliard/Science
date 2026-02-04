@@ -21,12 +21,19 @@ def _ensure_ca_bundle() -> None:
     """Ensure SSL certificate bundle is available.
 
     Some Python/uv environments on macOS can lack a configured trust store.
-    Using certifi makes HTTPS calls to arXiv more reliable.
+    Prefer the OS trust store when available (truststore), and fall back to
+    certifi when needed.
     """
 
-    ca = certifi.where()
-    os.environ.setdefault("SSL_CERT_FILE", ca)
-    os.environ.setdefault("REQUESTS_CA_BUNDLE", ca)
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+        return
+    except Exception:
+        ca = certifi.where()
+        os.environ.setdefault("SSL_CERT_FILE", ca)
+        os.environ.setdefault("REQUESTS_CA_BUNDLE", ca)
 
 
 def _insecure_ssl_enabled() -> bool:
@@ -40,7 +47,12 @@ def _http_verify_setting():
     custom = os.environ.get("SCIJUDGE_CA_BUNDLE")
     if custom and custom.strip():
         return custom.strip()
-    return certifi.where()
+    try:
+        import truststore  # noqa: F401
+
+        return True
+    except Exception:
+        return certifi.where()
 
 
 async def _http_get_text(url: str, *, params: dict | None = None) -> str:

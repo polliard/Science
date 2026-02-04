@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 import re
 
 from fastapi import FastAPI, Form, Request
@@ -55,6 +55,25 @@ def _load_project_dotenv() -> str | None:
 
 
 DOTENV_LOADED_FROM = _load_project_dotenv()
+
+
+def _maybe_inject_truststore() -> bool:
+    """Attempt to use OS trust store for TLS.
+
+    Some environments have custom root CAs in the OS keychain (e.g., corporate MITM).
+    Python's default CA bundle (certifi/OpenSSL) may not include them.
+    """
+
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+        return True
+    except Exception:
+        return False
+
+
+TRUSTSTORE_INJECTED = _maybe_inject_truststore()
 
 REPORTS_DIR = Path(os.getenv("SCIJUDGE_REPORTS_DIR", "reports")).resolve()
 
@@ -114,6 +133,55 @@ def _require_repo() -> ReviewsRepository:
             hint += f" (error: {err})"
         raise RuntimeError(hint)
     return repo
+
+
+@app.get("/health/llm")
+async def health_llm() -> JSONResponse:
+    """Smoke-test OpenAI connectivity.
+
+    This endpoint performs a minimal request (max_tokens=1) and returns a simple status.
+    It never returns secrets.
+    """
+
+    try:
+        from langchain_openai import ChatOpenAI
+
+        model = os.getenv("SCIJUDGE_OPENAI_MODEL", "gpt-4o-mini")
+        llm = cast(Any, ChatOpenAI)(
+            model=model,
+            temperature=0,
+            max_tokens=1,
+            timeout=20,
+        )
+        _ = llm.invoke("ping")
+        return JSONResponse(
+            {
+                "ok": True,
+                "provider": "openai",
+                "model": model,
+                "tls": {"truststore_injected": TRUSTSTORE_INJECTED},
+            }
+        )
+    except Exception as e:
+        return JSONResponse(
+            {
+                "ok": False,
+                "provider": "openai",
+                "error": f"{type(e).__name__}: {e}",
+                "tls": {"truststore_injected": TRUSTSTORE_INJECTED},
+            },
+            status_code=500,
+        )
+
+
+@app.get("/health")
+async def health() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "dotenv_loaded_from": DOTENV_LOADED_FROM,
+        "reports_dir": str(REPORTS_DIR),
+        "tls": {"truststore_injected": TRUSTSTORE_INJECTED},
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
