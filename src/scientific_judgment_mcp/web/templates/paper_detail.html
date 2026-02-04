@@ -86,6 +86,12 @@
 
     <div class="card">
         <h2>Reviews for this paper</h2>
+        {% if reviews and reviews|length > 1 %}
+        <p>
+            <a href="/papers/{{ paper.id }}/compare">Compare and contrast all reviews</a>
+            <span class="muted">(consensus + disagreements, not a text diff)</span>
+        </p>
+        {% endif %}
         {% if reviews and reviews|length > 0 %}
         <table>
             <thead>

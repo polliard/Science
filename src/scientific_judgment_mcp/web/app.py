@@ -289,6 +289,10 @@ async def paper_detail(request: Request, paper_id: str) -> Any:
 async def review_detail(request: Request, review_id: str) -> Any:
     repo = _require_repo()
     bundle = repo.fetch_review_bundle(review_id)
+    paper_id = None
+    review_row = (bundle.get("review") or {}) if isinstance(bundle, dict) else {}
+    if isinstance(review_row, dict):
+        paper_id = review_row.get("paper_id")
     verdicts = bundle.get("verdict_versions") or []
     versions = [v.get("version") for v in verdicts if v.get("version") is not None]
     versions_sorted = sorted({int(v) for v in versions})
@@ -306,6 +310,7 @@ async def review_detail(request: Request, review_id: str) -> Any:
         {
             "request": request,
             "review_id": review_id,
+            "paper_id": str(paper_id) if paper_id else None,
             "bundle": bundle,
             "versions": versions_sorted,
             "publishability": publishability,
@@ -320,44 +325,135 @@ async def download_review_bundle(review_id: str) -> JSONResponse:
     return JSONResponse(bundle)
 
 
-@app.get("/reviews/{review_id}/compare", response_class=HTMLResponse)
-async def compare_versions(request: Request, review_id: str, v1: int | None = None, v2: int | None = None) -> Any:
-    import difflib
+def _extract_verdict_dimensions(verdict: dict[str, Any]) -> dict[str, int]:
+    dims: dict[str, int] = {}
+    for k in [
+        "methodological_soundness",
+        "evidence_strength",
+        "novelty_value",
+        "scientific_contribution",
+        "risk_of_overreach",
+    ]:
+        v = verdict.get(k)
+        if isinstance(v, int):
+            dims[k] = v
+    return dims
+
+
+def _mean(values: list[int]) -> float:
+    return (sum(values) / len(values)) if values else 0.0
+
+
+@app.get("/papers/{paper_id}/compare", response_class=HTMLResponse)
+async def compare_paper_reviews(request: Request, paper_id: str, include_reviewers: bool = True) -> Any:
+    """Compare/contrast multiple independent reviews for the same paper.
+
+    This is *not* a text diff; it focuses on consensus vs disagreement across runs.
+    """
 
     repo = _require_repo()
+    paper = repo.get_paper(paper_id)
+    rows = repo.list_reviews_with_latest_verdicts_for_paper(paper_id=paper_id, limit=50)
 
-    if v1 is None or v2 is None:
-        bundle = repo.fetch_review_bundle(review_id)
-        verdicts = bundle.get("verdict_versions") or []
-        versions = [vv.get("version") for vv in verdicts if vv.get("version") is not None]
-        versions_sorted = sorted({int(v) for v in versions})
-        if len(versions_sorted) >= 2:
-            v1 = versions_sorted[0]
-            v2 = versions_sorted[-1]
-        elif len(versions_sorted) == 1:
-            v1 = versions_sorted[0]
-            v2 = versions_sorted[0]
-        else:
-            v1 = 1
-            v2 = 1
+    reviews: list[dict[str, Any]] = []
+    decision_counts: dict[str, int] = {}
 
-    diff = repo.compare_verdict_versions(review_id, v1, v2)
-    a = diff.get("a") or {}
-    b = diff.get("b") or {}
-    a_text = (a.get("synthesis") or "").splitlines(keepends=True)
-    b_text = (b.get("synthesis") or "").splitlines(keepends=True)
-    udiff = "".join(
-        difflib.unified_diff(a_text, b_text, fromfile=f"v{v1}", tofile=f"v{v2}")
-    )
+    for item in rows:
+        review_row = (item or {}).get("review") or {}
+        verdict_row = (item or {}).get("latest_verdict_version") or {}
+        rid = review_row.get("id")
+        if not rid:
+            continue
+
+        verdict = verdict_row.get("verdict")
+        verdict_dict: dict[str, Any] = verdict if isinstance(verdict, dict) else {}
+        dims = _extract_verdict_dimensions(verdict_dict)
+
+        pub = None
+        if isinstance(verdict_dict, dict):
+            pub = verdict_dict.get("publishability")
+        if pub is None:
+            pub = evaluate_publishability(verdict_dict).to_dict()
+        decision = str((pub or {}).get("decision") or "unknown")
+        decision_counts[decision] = decision_counts.get(decision, 0) + 1
+
+        reviewer_snips: list[dict[str, Any]] = []
+        if include_reviewers:
+            try:
+                reviewer_snips = repo.list_agent_message_snippets(review_id=str(rid))
+            except Exception:
+                reviewer_snips = []
+
+        synthesis = verdict_row.get("synthesis")
+        synthesis_preview = ""
+        if isinstance(synthesis, str):
+            synthesis_preview = synthesis.strip().replace("\r\n", "\n").replace("\r", "\n")[:1200]
+
+        reviews.append(
+            {
+                "review_id": str(rid),
+                "created_at": review_row.get("created_at"),
+                "verdict_version": verdict_row.get("version"),
+                "dimensions": dims,
+                "publishability": pub,
+                "rationale": verdict_dict.get("rationale") if isinstance(verdict_dict.get("rationale"), str) else "",
+                "synthesis_preview": synthesis_preview,
+                "reviewers": reviewer_snips,
+            }
+        )
+
+    # Compute consensus stats.
+    dim_keys = [
+        "methodological_soundness",
+        "evidence_strength",
+        "novelty_value",
+        "scientific_contribution",
+        "risk_of_overreach",
+    ]
+    dim_stats: list[dict[str, Any]] = []
+    disagreements: list[dict[str, Any]] = []
+
+    for k in dim_keys:
+        vals = [int(r["dimensions"][k]) for r in reviews if isinstance(r.get("dimensions"), dict) and k in r["dimensions"]]
+        if not vals:
+            continue
+        stats = {
+            "key": k,
+            "mean": round(_mean(vals), 2),
+            "min": min(vals),
+            "max": max(vals),
+            "range": max(vals) - min(vals),
+            "values": vals,
+        }
+        dim_stats.append(stats)
+        if stats["range"] >= 2:
+            # Provide a compact view of which reviews are on which side.
+            low = [r["review_id"] for r in reviews if r.get("dimensions", {}).get(k) == stats["min"]]
+            high = [r["review_id"] for r in reviews if r.get("dimensions", {}).get(k) == stats["max"]]
+            disagreements.append(
+                {
+                    "key": k,
+                    "min": stats["min"],
+                    "max": stats["max"],
+                    "low_reviews": low,
+                    "high_reviews": high,
+                }
+            )
+
+    # Show newest first.
+    reviews.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
 
     return templates.TemplateResponse(
-        "compare.html",
+        "paper_compare.html",
         {
             "request": request,
-            "review_id": review_id,
-            "v1": v1,
-            "v2": v2,
-            "diff": udiff,
+            "paper": paper,
+            "paper_id": paper_id,
+            "reviews": reviews,
+            "decision_counts": decision_counts,
+            "dim_stats": dim_stats,
+            "disagreements": disagreements,
+            "include_reviewers": include_reviewers,
         },
     )
 
@@ -803,10 +899,18 @@ async def job_page(request: Request, job_id: str) -> Any:
 async def job_events(job_id: str, limit: int = 100) -> JSONResponse:
     jobs_repo = _maybe_get_jobs_repo()
     if jobs_repo is None:
-        return JSONResponse({"ok": False, "error": "Supabase not configured"}, status_code=400)
+        return JSONResponse({"ok": False, "error": "Supabase not configured"}, status_code=200)
     lim = min(max(int(limit), 1), 300)
-    events = await asyncio.to_thread(jobs_repo.list_events, job_id, limit=lim)
-    return JSONResponse({"ok": True, "events": events})
+    try:
+        events = await asyncio.to_thread(jobs_repo.list_events, job_id, limit=lim)
+        return JSONResponse({"ok": True, "events": events})
+    except Exception as e:
+        # Keep the frontend polling loop stable (it always expects JSON).
+        hint = "If you just enabled job persistence, apply supabase/schema.sql in Supabase SQL editor and restart the web server."
+        return JSONResponse(
+            {"ok": False, "error": f"{type(e).__name__}: {e}", "hint": hint},
+            status_code=200,
+        )
 
 
 @app.get("/download/{filename:path}")

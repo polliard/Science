@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Compare reviews</title>
+    <style>
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system;
+            margin: 2rem;
+            max-width: 1200px;
+        }
+
+        .row {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            flex: 1;
+            min-width: 360px;
+        }
+
+        .muted {
+            color: #666;
+        }
+
+        pre {
+            background: #0b1020;
+            color: #e8e8e8;
+            padding: 1rem;
+            border-radius: 10px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+
+        code {
+            background: #f6f6f6;
+            padding: 0.15rem 0.3rem;
+            border-radius: 6px;
+        }
+
+        a {
+            color: #2b6cb0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            text-align: left;
+            padding: 0.5rem;
+            border-bottom: 1px solid #eee;
+            vertical-align: top;
+        }
+
+        .pill {
+            display: inline-block;
+            border: 1px solid #ddd;
+            border-radius: 999px;
+            padding: 0.15rem 0.5rem;
+            margin-right: 0.35rem;
+            background: #fafafa;
+        }
+    </style>
+</head>
+
+<body>
+    <p>
+        <a href="/papers/{{ paper_id }}">← back to paper</a>
+        · <a href="/papers">papers</a>
+        · <a href="/reviews">all reviews</a>
+    </p>
+
+    <h1>Compare reviews</h1>
+    <p class="muted">
+        arXiv: <code>{{ paper.arxiv_id }}</code>
+        · Paper ID: <code>{{ paper_id }}</code>
+    </p>
+    <p>{{ paper.title }}</p>
+
+    <div class="row">
+        <div class="card">
+            <h2>Summary</h2>
+            <p class="muted">High level outcomes across independent runs.</p>
+            <ul>
+                <li>Total reviews: <code>{{ reviews|length }}</code></li>
+                <li>
+                    Decisions:
+                    {% if decision_counts and decision_counts|length > 0 %}
+                    {% for k, v in decision_counts.items() %}
+                    <span class="pill"><code>{{ k }}</code>: <code>{{ v }}</code></span>
+                    {% endfor %}
+                    {% else %}
+                    <span class="muted">—</span>
+                    {% endif %}
+                </li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>Consensus (dimensions)</h2>
+            {% if dim_stats and dim_stats|length > 0 %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Dimension</th>
+                        <th>Mean</th>
+                        <th>Min</th>
+                        <th>Max</th>
+                        <th>Range</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in dim_stats %}
+                    <tr>
+                        <td><code>{{ s.key }}</code></td>
+                        <td><code>{{ s.mean }}</code></td>
+                        <td><code>{{ s.min }}</code></td>
+                        <td><code>{{ s.max }}</code></td>
+                        <td><code>{{ s.range }}</code></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="muted">No verdict dimensions found.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Key disagreements</h2>
+        {% if disagreements and disagreements|length > 0 %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Dimension</th>
+                    <th>Low</th>
+                    <th>High</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in disagreements %}
+                <tr>
+                    <td><code>{{ d.key }}</code></td>
+                    <td>
+                        <code>{{ d.min }}</code>
+                        <div class="muted">{% for rid in d.low_reviews %}<a
+                                href="/reviews/{{ rid }}"><code>{{ rid }}</code></a><br />{% endfor %}</div>
+                    </td>
+                    <td>
+                        <code>{{ d.max }}</code>
+                        <div class="muted">{% for rid in d.high_reviews %}<a
+                                href="/reviews/{{ rid }}"><code>{{ rid }}</code></a><br />{% endfor %}</div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="muted">No major disagreements detected (range &lt; 2 on all dimensions).</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Per-review contrasts</h2>
+        {% if reviews and reviews|length > 0 %}
+        {% for r in reviews %}
+        <div style="border-top: 1px solid #eee; padding-top: 1rem; margin-top: 1rem;">
+            <h3>
+                <a href="/reviews/{{ r.review_id }}"><code>{{ r.review_id }}</code></a>
+                <span class="muted">· {{ r.created_at }}</span>
+            </h3>
+            <p>
+                Publishability: <code>{{ (r.publishability or {}).decision }}</code>
+                {% if (r.publishability or {}).provisional %}
+                <span class="muted">(provisional)</span>
+                {% endif %}
+                {% if r.verdict_version %}
+                <span class="muted">· verdict v{{ r.verdict_version }}</span>
+                {% endif %}
+            </p>
+
+            <table>
+                <tbody>
+                    <tr>
+                        <td><code>methodological_soundness</code></td>
+                        <td><code>{{ (r.dimensions or {}).methodological_soundness }}</code></td>
+                        <td><code>evidence_strength</code></td>
+                        <td><code>{{ (r.dimensions or {}).evidence_strength }}</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>novelty_value</code></td>
+                        <td><code>{{ (r.dimensions or {}).novelty_value }}</code></td>
+                        <td><code>scientific_contribution</code></td>
+                        <td><code>{{ (r.dimensions or {}).scientific_contribution }}</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>risk_of_overreach</code></td>
+                        <td><code>{{ (r.dimensions or {}).risk_of_overreach }}</code></td>
+                        <td></td>
+                        <td></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            {% if r.rationale %}
+            <details>
+                <summary>Rationale</summary>
+                <pre>{{ r.rationale }}</pre>
+            </details>
+            {% endif %}
+
+            {% if r.synthesis_preview %}
+            <details>
+                <summary>Synthesis preview</summary>
+                <pre>{{ r.synthesis_preview }}</pre>
+            </details>
+            {% endif %}
+
+            {% if include_reviewers and r.reviewers and r.reviewers|length > 0 %}
+            <details>
+                <summary>Reviewer snippets (latest per agent)</summary>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Agent</th>
+                            <th>Phase</th>
+                            <th>Model</th>
+                            <th>Snippet</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for m in r.reviewers %}
+                        <tr>
+                            <td><code>{{ m.agent }}</code></td>
+                            <td class="muted">{{ m.phase }}</td>
+                            <td class="muted">{{ (m.model_provider or '') }} {{ (m.model_name or '') }}</td>
+                            <td class="muted">{{ m.content_preview }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </details>
+            {% endif %}
+        </div>
+        {% endfor %}
+        {% else %}
+        <p class="muted">No reviews found for this paper.</p>
+        {% endif %}
+    </div>
+</body>
+
+</html>

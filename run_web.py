@@ -19,12 +19,14 @@ def main() -> None:
 
     host = os.getenv("SCIJUDGE_WEB_HOST", "127.0.0.1")
     port = int(os.getenv("SCIJUDGE_WEB_PORT", "8000"))
+    reload_env = os.getenv("SCIJUDGE_WEB_RELOAD", "1").strip().lower()
+    reload = reload_env not in {"0", "false", "no", "off"}
 
     uvicorn.run(
         "scientific_judgment_mcp.web.app:app",
         host=host,
         port=port,
-        reload=True,
+        reload=reload,
         log_level="info",
     )
 

@@ -118,6 +118,85 @@ class ReviewsRepository:
         ).data
         return rows[0] if rows else None
 
+    def list_agent_message_snippets(
+        self,
+        *,
+        review_id: str,
+        scan_limit: int = 400,
+        preview_chars: int = 240,
+    ) -> list[dict[str, Any]]:
+        """Return one "latest" snippet per agent role for a review.
+
+        Intended for UIs (paper-level compare) to show what each reviewer emphasized
+        without fetching the full message log.
+        """
+
+        rows = (
+            self.client.table("agent_messages")
+            .select("agent, phase, timestamp, content, model_provider, model_name")
+            .eq("review_id", review_id)
+            .order("timestamp", desc=True)
+            .limit(int(scan_limit))
+            .execute()
+        ).data or []
+
+        seen: set[str] = set()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            agent = r.get("agent")
+            if not agent or not isinstance(agent, str):
+                continue
+            if agent in seen:
+                continue
+            seen.add(agent)
+            content = r.get("content")
+            preview = ""
+            if isinstance(content, str):
+                preview = content.strip().replace("\r\n", "\n").replace("\r", "\n")
+            out.append(
+                {
+                    "agent": agent,
+                    "phase": r.get("phase"),
+                    "timestamp": r.get("timestamp"),
+                    "model_provider": r.get("model_provider"),
+                    "model_name": r.get("model_name"),
+                    "content_preview": preview[: int(preview_chars)],
+                }
+            )
+
+        # Stable display order (not "most recent") so comparing across reviews is easier.
+        order = [
+            "moderator",
+            "methodologist",
+            "evidence_auditor",
+            "skeptic",
+            "paradigm_challenger",
+            "incentives_analyst",
+        ]
+        idx = {name: i for i, name in enumerate(order)}
+        out.sort(key=lambda x: idx.get(str(x.get("agent")), 999))
+        return out
+
+    def list_reviews_with_latest_verdicts_for_paper(
+        self,
+        *,
+        paper_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return reviews for a paper with their latest verdict version row (if any)."""
+
+        reviews = self.list_reviews_for_paper(paper_id=paper_id, limit=limit)
+        out: list[dict[str, Any]] = []
+        for r in reviews:
+            rid = r.get("id")
+            if not rid:
+                continue
+            latest = self.get_latest_verdict_version(str(rid))
+            out.append({"review": r, "latest_verdict_version": latest})
+        return out
+
     def append_verdict_version(self, *, review_id: str, verdict: dict[str, Any], synthesis: str) -> dict[str, Any]:
         latest = self.get_latest_verdict_version(review_id)
         next_version = int(latest["version"]) + 1 if latest else 1
@@ -292,8 +371,3 @@ class ReviewsRepository:
 
     def get_paper(self, paper_id: str) -> dict[str, Any]:
         return self.client.table("papers").select("*").eq("id", paper_id).single().execute().data
-
-    def compare_verdict_versions(self, review_id: str, v1: int, v2: int) -> dict[str, Any]:
-        a = self.client.table("verdict_versions").select("*").eq("review_id", review_id).eq("version", v1).single().execute().data
-        b = self.client.table("verdict_versions").select("*").eq("review_id", review_id).eq("version", v2).single().execute().data
-        return {"a": a, "b": b}

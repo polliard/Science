@@ -69,11 +69,11 @@
             <h2>Actions</h2>
             <ul>
                 <li><a href="/reviews/{{ review_id }}/bundle.json">Download bundle JSON</a></li>
-                {% if versions and versions|length >= 2 %}
-                <li><a href="/reviews/{{ review_id }}/compare?v1={{ versions[0] }}&v2={{ versions[-1] }}">Compare v{{
-                        versions[0] }} → v{{ versions[-1] }}</a></li>
+                {% if paper_id %}
+                <li><a href="/papers/{{ paper_id }}/compare">Compare and contrast all reviews for this paper</a></li>
+                <li><a href="/papers/{{ paper_id }}">View paper</a></li>
                 {% else %}
-                <li class="muted">Need 2+ verdict versions to compare</li>
+                <li class="muted">Paper not linked; cannot compare across runs</li>
                 {% endif %}
             </ul>
         </div>

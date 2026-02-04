@@ -31,13 +31,21 @@ class JobsRepository:
 
     def create_job(self, *, job: dict[str, Any]) -> None:
         """Insert a new job row."""
-        self.client.table("review_jobs").insert(job).execute()
+        try:
+            self.client.table("review_jobs").insert(job).execute()
+        except Exception:
+            # If the schema isn't applied (e.g., missing review_jobs), treat as non-fatal.
+            return
 
     def update_job(self, job_id: str, *, patch: dict[str, Any]) -> None:
         """Patch an existing job row."""
         patch = dict(patch)
         patch.setdefault("updated_at", datetime.now().isoformat())
-        self.client.table("review_jobs").update(patch).eq("id", job_id).execute()
+        try:
+            self.client.table("review_jobs").update(patch).eq("id", job_id).execute()
+        except Exception:
+            # If the schema isn't applied, treat as non-fatal.
+            return
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         try:
@@ -57,19 +65,28 @@ class JobsRepository:
         }
         # Explicitly drop id so postgres default can apply.
         row.pop("id", None)
-        self.client.table("review_job_events").insert(row).execute()
+        try:
+            self.client.table("review_job_events").insert(row).execute()
+        except Exception:
+            # If the schema isn't applied (e.g., missing review_job_events), treat as non-fatal.
+            return
 
     def list_events(self, job_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
-        rows = (
-            self.client.table("review_job_events")
-            .select("*")
-            .eq("job_id", job_id)
-            .order("created_at", desc=False)
-            .limit(limit)
-            .execute()
-        ).data
-        if not rows:
+        try:
+            rows = (
+                self.client.table("review_job_events")
+                .select("*")
+                .eq("job_id", job_id)
+                .order("created_at", desc=False)
+                .limit(limit)
+                .execute()
+            ).data
+            if not rows:
+                return []
+            if isinstance(rows, list):
+                return [cast(dict[str, Any], r) for r in rows if isinstance(r, dict)]
             return []
-        if isinstance(rows, list):
-            return [cast(dict[str, Any], r) for r in rows if isinstance(r, dict)]
-        return []
+        except Exception:
+            # Most commonly: PGRST205 (table not found in schema cache) when schema.sql
+            # hasn't been applied yet.
+            return []
