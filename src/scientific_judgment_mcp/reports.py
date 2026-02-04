@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from scientific_judgment_mcp.orchestration import DebateState, PaperContext, VerdictDimension
+from scientific_judgment_mcp.publishability import evaluate_publishability
 
 
 def generate_markdown_report(state: DebateState, output_dir: Path) -> Path:
@@ -116,6 +117,12 @@ def generate_markdown_report(state: DebateState, output_dir: Path) -> Path:
 
     # Multi-Axis Verdict
     if verdict:
+        pub = evaluate_publishability(
+            verdict,
+            extraction_limitations=state.get("extraction_limitations", []),
+            principle_violations=state.get("principle_violations", []),
+        )
+
         report_lines.extend([
             "## Multi-Axis Verdict",
             "",
@@ -129,6 +136,20 @@ def generate_markdown_report(state: DebateState, output_dir: Path) -> Path:
             f"| **Scientific Contribution** | {verdict.scientific_contribution}/5 | Usefulness to field, even if wrong |",
             f"| **Risk of Overreach** | {verdict.risk_of_overreach}/5 | Gap between data and claims |",
             "",
+            "### Publishability Gate (Canonical)",
+            "",
+            f"**Decision**: {pub.decision}{" (provisional)" if pub.provisional else ""}",
+            "",
+            "Gates:",
+            f"- methodological_soundness>=3: {pub.gates.get('methodological_soundness>=3')}",
+            f"- evidence_strength>=3: {pub.gates.get('evidence_strength>=3')}",
+            f"- risk_of_overreach<=3: {pub.gates.get('risk_of_overreach<=3')}",
+            "",
+            "Notes:",
+        ])
+        for reason in pub.reasons:
+            report_lines.append(f"- {reason}")
+        report_lines.extend([
             "### Rationale",
             "",
             verdict.rationale,
@@ -341,6 +362,13 @@ def generate_json_summary(state: DebateState, output_dir: Path) -> Path:
             "authors": paper.authors,
         },
         "verdict": verdict.model_dump() if verdict else None,
+        "publishability": evaluate_publishability(
+            verdict,
+            extraction_limitations=state.get("extraction_limitations", []),
+            principle_violations=state.get("principle_violations", []),
+        ).to_dict()
+        if verdict
+        else None,
         "review_metadata": {
             "start_time": state["start_time"].isoformat(),
             "phases_completed": len(state["phase_transitions"]),
