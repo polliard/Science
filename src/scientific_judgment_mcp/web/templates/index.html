@@ -73,7 +73,8 @@
 
             {% if not supabase_configured %}
             <p class="warn">Supabase not configured (or init failed). Configure <code>.env</code> and apply
-                <code>supabase/schema.sql</code> in the Supabase SQL editor.</p>
+                <code>supabase/schema.sql</code> in the Supabase SQL editor.
+            </p>
             {% endif %}
 
             <p style="margin-top: 1rem;"><button type="submit">Run review</button></p>
@@ -84,6 +85,9 @@
         <h2>Human feedback</h2>
         <p>Submit critique against an existing persisted review.</p>
         <p><a href="/feedback">Open feedback form</a></p>
+        {% if supabase_configured %}
+        <p><a href="/reviews">Browse persisted reviews</a></p>
+        {% endif %}
     </div>
 </body>
 

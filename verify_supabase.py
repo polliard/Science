@@ -55,9 +55,16 @@ async def main() -> int:
         print(f"messages: {len(bundle.get('agent_messages') or [])}")
         print(f"verdict_versions: {len(bundle.get('verdict_versions') or [])}")
 
-        # Compare versions (only one exists yet)
-        print("UNVERIFIED: version comparison requires at least 2 versions.")
-        print("Next step: insert a second verdict version (e.g., after human feedback) and compare.")
+        # Create a second version (forward-only note) and compare.
+        note = "Human feedback (simulated): tighten language around evidence strength; add explicit limitations section."
+        v2 = repo.apply_forward_change_note_as_new_version(review_id=stored.review_id, forward_change_note=note)
+        print("✅ Appended verdict version")
+        print(f"version: {v2['version']}")
+
+        diff = repo.compare_verdict_versions(stored.review_id, 1, int(v2["version"]))
+        print("✅ Compared verdict versions")
+        print(f"a.version: {diff['a']['version']}")
+        print(f"b.version: {diff['b']['version']}")
 
     except Exception as exc:
         print("UNVERIFIED: Failed to store/replay review.")

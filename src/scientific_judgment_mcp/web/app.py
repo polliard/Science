@@ -8,7 +8,7 @@ from typing import Any
 import re
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from scientific_judgment_mcp.feedback import (
@@ -70,6 +70,15 @@ def _maybe_get_repo() -> ReviewsRepository | None:
         return None
 
 
+def _require_repo() -> ReviewsRepository:
+    repo = _maybe_get_repo()
+    if repo is None:
+        raise RuntimeError(
+            "Supabase is not configured (or client init failed). Ensure .env is set and schema.sql is applied."
+        )
+    return repo
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> Any:
     return templates.TemplateResponse(
@@ -78,6 +87,71 @@ async def index(request: Request) -> Any:
             "request": request,
             "reports_dir": str(REPORTS_DIR),
             "supabase_configured": _maybe_get_repo() is not None,
+        },
+    )
+
+
+@app.get("/reviews", response_class=HTMLResponse)
+async def list_reviews(request: Request) -> Any:
+    repo = _require_repo()
+    reviews = repo.list_recent_reviews(limit=50)
+    return templates.TemplateResponse(
+        "reviews.html",
+        {
+            "request": request,
+            "reviews": reviews,
+        },
+    )
+
+
+@app.get("/reviews/{review_id}", response_class=HTMLResponse)
+async def review_detail(request: Request, review_id: str) -> Any:
+    repo = _require_repo()
+    bundle = repo.fetch_review_bundle(review_id)
+    verdicts = bundle.get("verdict_versions") or []
+    versions = [v.get("version") for v in verdicts if v.get("version") is not None]
+    versions_sorted = sorted({int(v) for v in versions})
+
+    return templates.TemplateResponse(
+        "review_detail.html",
+        {
+            "request": request,
+            "review_id": review_id,
+            "bundle": bundle,
+            "versions": versions_sorted,
+        },
+    )
+
+
+@app.get("/reviews/{review_id}/bundle.json")
+async def download_review_bundle(review_id: str) -> JSONResponse:
+    repo = _require_repo()
+    bundle = repo.fetch_review_bundle(review_id)
+    return JSONResponse(bundle)
+
+
+@app.get("/reviews/{review_id}/compare", response_class=HTMLResponse)
+async def compare_versions(request: Request, review_id: str, v1: int = 1, v2: int = 2) -> Any:
+    import difflib
+
+    repo = _require_repo()
+    diff = repo.compare_verdict_versions(review_id, v1, v2)
+    a = diff.get("a") or {}
+    b = diff.get("b") or {}
+    a_text = (a.get("synthesis") or "").splitlines(keepends=True)
+    b_text = (b.get("synthesis") or "").splitlines(keepends=True)
+    udiff = "".join(
+        difflib.unified_diff(a_text, b_text, fromfile=f"v{v1}", tofile=f"v{v2}")
+    )
+
+    return templates.TemplateResponse(
+        "compare.html",
+        {
+            "request": request,
+            "review_id": review_id,
+            "v1": v1,
+            "v2": v2,
+            "diff": udiff,
         },
     )
 
@@ -141,6 +215,7 @@ async def run_review(
             "persist_to_supabase": persist_to_supabase,
             "persisted": persisted,
             "persist_error": persist_error,
+            "persisted_review_id": (persisted or {}).get("review_id"),
             "report_md": artifacts.report_md.relative_to(REPORTS_DIR).as_posix(),
             "claims_json": artifacts.claims_json.relative_to(REPORTS_DIR).as_posix() if artifacts.claims_json else None,
             "summary_json": artifacts.summary_json.relative_to(REPORTS_DIR).as_posix() if artifacts.summary_json else None,
@@ -180,6 +255,7 @@ async def submit_feedback(
     store_error: str | None = None
     change_note: str | None = None
     comparison: dict[str, Any] | None = None
+    verdict_update: dict[str, Any] | None = None
 
     repo = _maybe_get_repo()
     if repo is None:
@@ -196,7 +272,11 @@ async def submit_feedback(
                 classification=classification,
                 forward_change_note=change_note,
             )
-            stored = {"feedback_id": feedback_id}
+            verdict_update = repo.apply_forward_change_note_as_new_version(
+                review_id=review_id,
+                forward_change_note=change_note,
+            )
+            stored = {"feedback_id": feedback_id, "verdict_update": verdict_update}
         except Exception as e:
             store_error = str(e)
 
@@ -211,6 +291,7 @@ async def submit_feedback(
             "comparison": comparison,
             "change_note": change_note,
             "stored": stored,
+            "verdict_update": verdict_update,
             "store_error": store_error,
         },
     )

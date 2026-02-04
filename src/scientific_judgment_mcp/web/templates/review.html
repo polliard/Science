@@ -79,6 +79,9 @@
             {% if persist_to_supabase %}
             {% if persisted %}
             <p>Stored review bundle.</p>
+            {% if persisted_review_id %}
+            <p><a href="/reviews/{{ persisted_review_id }}">View persisted review</a></p>
+            {% endif %}
             <pre>{{ persisted | tojson }}</pre>
             {% else %}
             <p class="error">Persist failed:

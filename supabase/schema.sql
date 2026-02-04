@@ -32,7 +32,7 @@ create table if not exists agent_messages (
   model_name text,
   temperature numeric,
   max_tokens int,
-  references jsonb not null default '[]'::jsonb,
+  references_json jsonb not null default '[]'::jsonb,
   flags_violation boolean not null default false,
   created_at timestamptz not null default now()
 );

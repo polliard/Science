@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Review detail</title>
+    <style>
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system;
+            margin: 2rem;
+            max-width: 1100px;
+        }
+
+        .row {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            flex: 1;
+            min-width: 320px;
+        }
+
+        .muted {
+            color: #666;
+        }
+
+        pre {
+            background: #0b1020;
+            color: #e8e8e8;
+            padding: 1rem;
+            border-radius: 10px;
+            overflow-x: auto;
+        }
+
+        code {
+            background: #f6f6f6;
+            padding: 0.15rem 0.3rem;
+            border-radius: 6px;
+        }
+
+        a {
+            color: #2b6cb0;
+        }
+
+        ul {
+            margin: 0.5rem 0 0 1.25rem;
+        }
+    </style>
+</head>
+
+<body>
+    <p>
+        <a href="/">← back</a>
+        · <a href="/reviews">all reviews</a>
+    </p>
+
+    <h1>Review</h1>
+    <p class="muted"><code>{{ review_id }}</code></p>
+
+    <div class="row">
+        <div class="card">
+            <h2>Actions</h2>
+            <ul>
+                <li><a href="/reviews/{{ review_id }}/bundle.json">Download bundle JSON</a></li>
+                {% if versions and versions|length >= 2 %}
+                <li><a href="/reviews/{{ review_id }}/compare?v1={{ versions[0] }}&v2={{ versions[-1] }}">Compare v{{
+                        versions[0] }} → v{{ versions[-1] }}</a></li>
+                {% else %}
+                <li class="muted">Need 2+ verdict versions to compare</li>
+                {% endif %}
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>Bundle summary</h2>
+            <ul>
+                <li>messages: <code>{{ (bundle.agent_messages|length) if bundle.agent_messages else 0 }}</code></li>
+                <li>verdict_versions:
+                    <code>{{ (bundle.verdict_versions|length) if bundle.verdict_versions else 0 }}</code></li>
+                <li>human_feedback: <code>{{ (bundle.human_feedback|length) if bundle.human_feedback else 0 }}</code>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Review row</h2>
+        <pre>{{ bundle.review | tojson }}</pre>
+    </div>
+
+    <div class="card">
+        <h2>Verdict versions</h2>
+        <pre>{{ bundle.verdict_versions | tojson }}</pre>
+    </div>
+
+    <div class="card">
+        <h2>Human feedback</h2>
+        <pre>{{ bundle.human_feedback | tojson }}</pre>
+    </div>
+
+    <div class="card">
+        <h2>Agent messages (first 10)</h2>
+        <pre>{{ (bundle.agent_messages[:10] if bundle.agent_messages else []) | tojson }}</pre>
+        <p class="muted">This page truncates messages for readability; the bundle JSON contains all.</p>
+    </div>
+</body>
+
+</html>

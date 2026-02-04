@@ -87,7 +87,7 @@ class ReviewsRepository:
                     "model_name": m.get("model_name"),
                     "temperature": m.get("temperature"),
                     "max_tokens": m.get("max_tokens"),
-                    "references": m.get("references") or [],
+                    "references_json": m.get("references") or [],
                     "flags_violation": bool(m.get("flags_violation") or False),
                 }
             )
@@ -106,6 +106,45 @@ class ReviewsRepository:
         }
         self.client.table("verdict_versions").insert(row).execute()
         return verdict_id
+
+    def get_latest_verdict_version(self, review_id: str) -> dict[str, Any] | None:
+        rows = (
+            self.client.table("verdict_versions")
+            .select("*")
+            .eq("review_id", review_id)
+            .order("version", desc=True)
+            .limit(1)
+            .execute()
+        ).data
+        return rows[0] if rows else None
+
+    def append_verdict_version(self, *, review_id: str, verdict: dict[str, Any], synthesis: str) -> dict[str, Any]:
+        latest = self.get_latest_verdict_version(review_id)
+        next_version = int(latest["version"]) + 1 if latest else 1
+        verdict_id = self.create_verdict_version(
+            review_id=review_id,
+            version=next_version,
+            verdict=verdict,
+            synthesis=synthesis,
+        )
+        return {"verdict_id": verdict_id, "version": next_version}
+
+    def apply_forward_change_note_as_new_version(self, *, review_id: str, forward_change_note: str) -> dict[str, Any]:
+        """Create a new verdict version that appends a forward-only note.
+
+        This intentionally does not attempt to "fix" the past verdict; it records a new version.
+        """
+
+        latest = self.get_latest_verdict_version(review_id)
+        if not latest:
+            raise RuntimeError("No existing verdict version found for review")
+
+        new_synthesis = (latest.get("synthesis") or "").rstrip() + "\n\n---\nForward-only change note:\n" + forward_change_note
+        return self.append_verdict_version(
+            review_id=review_id,
+            verdict=latest.get("verdict") or {},
+            synthesis=new_synthesis,
+        )
 
     def store_review_state(self, state: DebateState) -> StoredReview:
         paper_id = self.ensure_paper(state["paper"])
@@ -162,6 +201,16 @@ class ReviewsRepository:
             "agent_messages": messages,
             "human_feedback": feedback,
         }
+
+    def list_recent_reviews(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        rows = (
+            self.client.table("reviews")
+            .select("id, paper_id, created_at")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        ).data
+        return rows or []
 
     def compare_verdict_versions(self, review_id: str, v1: int, v2: int) -> dict[str, Any]:
         a = self.client.table("verdict_versions").select("*").eq("review_id", review_id).eq("version", v1).single().execute().data
