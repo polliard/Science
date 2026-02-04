@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dotenv import load_dotenv
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +25,37 @@ from scientific_judgment_mcp.tools.arxiv import ingest_arxiv_paper
 
 
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parents[3]
 TEMPLATES_DIR = BASE_DIR / "templates"
+
+
+def _load_project_dotenv() -> str | None:
+    """Load env vars for the web backend.
+
+    - Respects SCIJUDGE_ENV_PATH if set
+    - Falls back to <project_root>/.env then <cwd>/.env
+    """
+
+    candidates: list[Path] = []
+    explicit = os.getenv("SCIJUDGE_ENV_PATH")
+    if explicit and explicit.strip():
+        candidates.append(Path(explicit).expanduser())
+    candidates.append(PROJECT_ROOT / ".env")
+    candidates.append(Path.cwd() / ".env")
+
+    for p in candidates:
+        try:
+            if p.exists():
+                load_dotenv(p, override=True)
+                return str(p.resolve())
+        except Exception:
+            # If dotenv load fails for some reason, continue to next candidate.
+            continue
+    return None
+
+
+DOTENV_LOADED_FROM = _load_project_dotenv()
+
 REPORTS_DIR = Path(os.getenv("SCIJUDGE_REPORTS_DIR", "reports")).resolve()
 
 
@@ -59,34 +90,43 @@ def _artifacts_from_map(artifacts: dict[str, Path]) -> ReviewArtifacts:
 
 
 def _maybe_get_repo() -> ReviewsRepository | None:
-    try:
-        client = get_supabase_client(env_path=".env")
-    except Exception:
-        return None
+    repo, _err = _repo_status()
+    return repo
 
+
+def _repo_status() -> tuple[ReviewsRepository | None, str | None]:
     try:
-        return ReviewsRepository(client)
-    except Exception:
-        return None
+        # get_supabase_client can load .env too, but we pre-load here so other config
+        # (including host/port/reports dir) is also pulled from .env.
+        client = get_supabase_client(env_path=None)
+        return ReviewsRepository(client), None
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
 
 
 def _require_repo() -> ReviewsRepository:
-    repo = _maybe_get_repo()
+    repo, err = _repo_status()
     if repo is None:
-        raise RuntimeError(
-            "Supabase is not configured (or client init failed). Ensure .env is set and schema.sql is applied."
-        )
+        hint = "Supabase is not configured (or client init failed). Ensure .env is set and schema.sql is applied."
+        if DOTENV_LOADED_FROM:
+            hint += f" (dotenv loaded from: {DOTENV_LOADED_FROM})"
+        if err:
+            hint += f" (error: {err})"
+        raise RuntimeError(hint)
     return repo
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> Any:
+    _repo, repo_err = _repo_status()
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
             "reports_dir": str(REPORTS_DIR),
-            "supabase_configured": _maybe_get_repo() is not None,
+            "supabase_configured": _repo is not None,
+            "supabase_error": repo_err,
+            "dotenv_loaded_from": DOTENV_LOADED_FROM,
         },
     )
 

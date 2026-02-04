@@ -75,6 +75,12 @@
             <p class="warn">Supabase not configured (or init failed). Configure <code>.env</code> and apply
                 <code>supabase/schema.sql</code> in the Supabase SQL editor.
             </p>
+            {% if dotenv_loaded_from %}
+            <p class="muted">dotenv loaded from: <code>{{ dotenv_loaded_from }}</code></p>
+            {% endif %}
+            {% if supabase_error %}
+            <p class="warn">Supabase init error: <code>{{ supabase_error }}</code></p>
+            {% endif %}
             {% endif %}
 
             <p style="margin-top: 1rem;"><button type="submit">Run review</button></p>
