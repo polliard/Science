@@ -10,3 +10,9 @@ wheels/
 .venv
 
 reports/
+
+# Secrets / environment
+.env
+.env.*
+!.env.example
+!.env.template
