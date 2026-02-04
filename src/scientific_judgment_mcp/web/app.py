@@ -7,9 +7,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 import re
+import asyncio
+from uuid import uuid4
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from scientific_judgment_mcp.feedback import (
@@ -17,9 +19,15 @@ from scientific_judgment_mcp.feedback import (
     compare_feedback_to_review,
     propose_forward_change,
 )
-from scientific_judgment_mcp.orchestration.debate_protocol import run_debate_async
+from scientific_judgment_mcp.orchestration.debate_protocol import (
+    run_debate_async,
+    register_progress_callback,
+    unregister_progress_callback,
+)
 from scientific_judgment_mcp.reports import generate_all_artifacts
+from scientific_judgment_mcp.publishability import evaluate_publishability
 from scientific_judgment_mcp.persistence.reviews_repo import ReviewsRepository
+from scientific_judgment_mcp.persistence.jobs_repo import JobsRepository
 from scientific_judgment_mcp.persistence.supabase_client import get_supabase_client
 from scientific_judgment_mcp.tools.arxiv import ingest_arxiv_paper
 
@@ -89,6 +97,30 @@ class ReviewArtifacts:
     claims_json: Path | None
     summary_json: Path | None
 
+
+@dataclass
+class ReviewJob:
+    job_id: str
+    created_at: str
+    status: str  # queued|running|complete|error
+    step: str
+    arxiv_id_or_url: str
+    normalized_arxiv_id: str | None
+    allow_insecure_tls: bool
+    persist_to_supabase: bool
+    num_reviews: int
+    current_run: int
+    messages_count: int
+    last_agent: str | None
+    last_phase: str | None
+    error: str | None
+    artifacts: list[dict[str, Any]]
+    persisted_reviews: list[dict[str, Any]]
+
+
+_JOBS: dict[str, ReviewJob] = {}
+_JOBS_LOCK = asyncio.Lock()
+
 _ARXIV_ID_RE = re.compile(r"(?:(?:arxiv\.)?org/(?:abs|pdf)/)?(?P<id>\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?", re.IGNORECASE)
 
 
@@ -121,6 +153,19 @@ def _repo_status() -> tuple[ReviewsRepository | None, str | None]:
         return ReviewsRepository(client), None
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
+
+
+def _jobs_repo_status() -> tuple[JobsRepository | None, str | None]:
+    try:
+        client = get_supabase_client(env_path=None)
+        return JobsRepository(client), None
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _maybe_get_jobs_repo() -> JobsRepository | None:
+    repo, _err = _jobs_repo_status()
+    return repo
 
 
 def _require_repo() -> ReviewsRepository:
@@ -248,6 +293,14 @@ async def review_detail(request: Request, review_id: str) -> Any:
     versions = [v.get("version") for v in verdicts if v.get("version") is not None]
     versions_sorted = sorted({int(v) for v in versions})
 
+    latest_verdict_row = verdicts[-1] if verdicts else None
+    latest_verdict = (latest_verdict_row or {}).get("verdict") or None
+    publishability = None
+    if isinstance(latest_verdict, dict):
+        publishability = latest_verdict.get("publishability")
+    if publishability is None and latest_verdict is not None:
+        publishability = evaluate_publishability(latest_verdict).to_dict()
+
     return templates.TemplateResponse(
         "review_detail.html",
         {
@@ -255,6 +308,7 @@ async def review_detail(request: Request, review_id: str) -> Any:
             "review_id": review_id,
             "bundle": bundle,
             "versions": versions_sorted,
+            "publishability": publishability,
         },
     )
 
@@ -267,10 +321,26 @@ async def download_review_bundle(review_id: str) -> JSONResponse:
 
 
 @app.get("/reviews/{review_id}/compare", response_class=HTMLResponse)
-async def compare_versions(request: Request, review_id: str, v1: int = 1, v2: int = 2) -> Any:
+async def compare_versions(request: Request, review_id: str, v1: int | None = None, v2: int | None = None) -> Any:
     import difflib
 
     repo = _require_repo()
+
+    if v1 is None or v2 is None:
+        bundle = repo.fetch_review_bundle(review_id)
+        verdicts = bundle.get("verdict_versions") or []
+        versions = [vv.get("version") for vv in verdicts if vv.get("version") is not None]
+        versions_sorted = sorted({int(v) for v in versions})
+        if len(versions_sorted) >= 2:
+            v1 = versions_sorted[0]
+            v2 = versions_sorted[-1]
+        elif len(versions_sorted) == 1:
+            v1 = versions_sorted[0]
+            v2 = versions_sorted[0]
+        else:
+            v1 = 1
+            v2 = 1
+
     diff = repo.compare_verdict_versions(review_id, v1, v2)
     a = diff.get("a") or {}
     b = diff.get("b") or {}
@@ -298,66 +368,445 @@ async def run_review(
     arxiv_id_or_url: str = Form(...),
     allow_insecure_tls: bool = Form(False),
     persist_to_supabase: bool = Form(False),
+    num_reviews: int = Form(2),
 ) -> Any:
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    # This route enqueues a background job so the browser connection doesn't time out.
+    # Results are available under /jobs/{job_id}.
+    job_id = str(uuid4())
+    n = int(num_reviews) if int(num_reviews) > 0 else 1
+    n = min(max(n, 1), 6)
 
-    # arXiv ingestion currently uses an environment variable toggle for insecure TLS.
-    # We scope it to this request.
+    job = ReviewJob(
+        job_id=job_id,
+        created_at=datetime.now().isoformat(),
+        status="submitted",
+        step="submitted",
+        arxiv_id_or_url=arxiv_id_or_url,
+        normalized_arxiv_id=None,
+        allow_insecure_tls=bool(allow_insecure_tls),
+        persist_to_supabase=bool(persist_to_supabase),
+        num_reviews=n,
+        current_run=0,
+        messages_count=0,
+        last_agent=None,
+        last_phase=None,
+        error=None,
+        artifacts=[],
+        persisted_reviews=[],
+    )
+
+    async with _JOBS_LOCK:
+        _JOBS[job_id] = job
+
+    jobs_repo = _maybe_get_jobs_repo()
+    if jobs_repo is not None:
+        try:
+            await asyncio.to_thread(
+                jobs_repo.create_job,
+                job={
+                    "id": job_id,
+                    "status": "submitted",
+                    "step": "submitted",
+                    "arxiv_id_or_url": arxiv_id_or_url,
+                    "normalized_arxiv_id": None,
+                    "allow_insecure_tls": bool(allow_insecure_tls),
+                    "persist_to_supabase": bool(persist_to_supabase),
+                    "num_reviews": n,
+                    "current_run": 0,
+                    "messages_count": 0,
+                    "last_agent": None,
+                    "last_phase": None,
+                    "error": None,
+                    "artifacts": [],
+                    "persisted_reviews": [],
+                },
+            )
+            await asyncio.to_thread(
+                jobs_repo.append_event,
+                job_id=job_id,
+                event_type="state",
+                payload={"status": "submitted", "step": "submitted"},
+            )
+        except Exception:
+            # Best-effort: job UI still works in-memory.
+            pass
+
+    asyncio.create_task(_run_review_job(job_id))
+    return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
+
+
+def _job_to_dict(job: ReviewJob) -> dict[str, Any]:
+    return {
+        "job_id": job.job_id,
+        "created_at": job.created_at,
+        "status": job.status,
+        "step": job.step,
+        "arxiv_id_or_url": job.arxiv_id_or_url,
+        "normalized_arxiv_id": job.normalized_arxiv_id,
+        "allow_insecure_tls": job.allow_insecure_tls,
+        "persist_to_supabase": job.persist_to_supabase,
+        "num_reviews": job.num_reviews,
+        "current_run": job.current_run,
+        "messages_count": job.messages_count,
+        "last_agent": job.last_agent,
+        "last_phase": job.last_phase,
+        "error": job.error,
+        "artifacts": job.artifacts,
+        "persisted_reviews": job.persisted_reviews,
+    }
+
+
+def _normalize_job_row(row: dict[str, Any]) -> dict[str, Any]:
+    # Supabase row uses `id`; UI expects `job_id`.
+    out = dict(row)
+    out["job_id"] = str(out.pop("id", out.get("job_id")))
+    return out
+
+
+async def _set_job(job_id: str, **kwargs: Any) -> None:
+    async with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return
+        for k, v in kwargs.items():
+            setattr(job, k, v)
+
+    jobs_repo = _maybe_get_jobs_repo()
+    if jobs_repo is None:
+        return
+
+    patch: dict[str, Any] = {}
+    for k, v in kwargs.items():
+        if k in {
+            "status",
+            "step",
+            "normalized_arxiv_id",
+            "num_reviews",
+            "current_run",
+            "messages_count",
+            "last_agent",
+            "last_phase",
+            "error",
+        }:
+            patch[k] = v
+    if patch:
+        try:
+            await asyncio.to_thread(jobs_repo.update_job, job_id, patch=patch)
+        except Exception:
+            pass
+
+
+async def _run_review_job(job_id: str) -> None:
+    jobs_repo = _maybe_get_jobs_repo()
+    await _set_job(job_id, status="adjudicating", step="starting")
+    if jobs_repo is not None:
+        try:
+            await asyncio.to_thread(
+                jobs_repo.append_event,
+                job_id=job_id,
+                event_type="state",
+                payload={"status": "adjudicating", "step": "starting"},
+            )
+        except Exception:
+            pass
+
+    # arXiv ingestion uses env toggle for insecure TLS; scope it to this job.
     prior_insecure = os.environ.get("SCIJUDGE_INSECURE_SSL")
-    try:
-        if allow_insecure_tls:
-            os.environ["SCIJUDGE_INSECURE_SSL"] = "1"
-        else:
-            os.environ.pop("SCIJUDGE_INSECURE_SSL", None)
+    thread_id = f"job:{job_id}"
 
-        paper = await ingest_arxiv_paper(_normalize_arxiv_id_or_url(arxiv_id_or_url))
-    finally:
-        if prior_insecure is None:
-            os.environ.pop("SCIJUDGE_INSECURE_SSL", None)
-        else:
-            os.environ["SCIJUDGE_INSECURE_SSL"] = prior_insecure
+    def _progress_cb(msg: Any, state: Any) -> None:
+        # Best-effort progress update.
+        try:
+            asyncio.get_event_loop()
+        except Exception:
+            return
+        try:
+            # Update without blocking the worker.
+            asyncio.create_task(
+                _set_job(
+                    job_id,
+                    messages_count=len(state.get("messages") or []),
+                    last_agent=str(getattr(msg, "agent", "")),
+                    last_phase=str(getattr(msg, "phase", "")),
+                    step="debating",
+                )
+            )
+        except Exception:
+            pass
 
-    debate_state = await run_debate_async(paper)
-
-    run_dir = REPORTS_DIR / paper.arxiv_id / datetime.now().strftime("%Y%m%d_%H%M%S")
-    artifacts_map = generate_all_artifacts(debate_state, run_dir)
-    artifacts = _artifacts_from_map(artifacts_map)
-
-    persisted: dict[str, Any] | None = None
-    persist_error: str | None = None
-
-    if persist_to_supabase:
-        repo = _maybe_get_repo()
-        if repo is None:
-            persist_error = "Supabase is not configured (or client init failed)."
-        else:
+        if jobs_repo is not None:
             try:
-                stored = repo.store_review_state(debate_state)
-                persisted = {
-                    "review_id": stored.review_id,
-                    "paper_id": stored.paper_id,
-                    "created_at": stored.created_at,
-                    "version": stored.version,
+                payload = {
+                    "agent": str(getattr(msg, "agent", "")),
+                    "phase": str(getattr(msg, "phase", "")),
+                    "timestamp": str(getattr(msg, "timestamp", "")),
+                    "model_provider": str(getattr(msg, "model_provider", "") or ""),
+                    "model_name": str(getattr(msg, "model_name", "") or ""),
+                    "content_preview": str(getattr(msg, "content", "") or "")[:220],
                 }
-            except Exception as e:
-                persist_error = str(e)
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        jobs_repo.append_event,
+                        job_id=job_id,
+                        event_type="agent_message",
+                        payload=payload,
+                    )
+                )
+            except Exception:
+                pass
 
+    register_progress_callback(thread_id, _progress_cb)
+
+    try:
+        allow_insecure_tls = False
+        num_reviews = 1
+        arxiv_id_or_url = ""
+        async with _JOBS_LOCK:
+            j = _JOBS.get(job_id)
+            if j:
+                allow_insecure_tls = j.allow_insecure_tls
+                num_reviews = j.num_reviews
+                arxiv_id_or_url = j.arxiv_id_or_url
+
+        try:
+            if allow_insecure_tls:
+                os.environ["SCIJUDGE_INSECURE_SSL"] = "1"
+            else:
+                os.environ.pop("SCIJUDGE_INSECURE_SSL", None)
+
+            await _set_job(job_id, step="ingesting")
+            if jobs_repo is not None:
+                try:
+                    await asyncio.to_thread(
+                        jobs_repo.append_event,
+                        job_id=job_id,
+                        event_type="step",
+                        payload={"step": "ingesting"},
+                    )
+                except Exception:
+                    pass
+            normalized = _normalize_arxiv_id_or_url(arxiv_id_or_url)
+            await _set_job(job_id, normalized_arxiv_id=normalized)
+            paper = await ingest_arxiv_paper(normalized)
+        finally:
+            if prior_insecure is None:
+                os.environ.pop("SCIJUDGE_INSECURE_SSL", None)
+            else:
+                os.environ["SCIJUDGE_INSECURE_SSL"] = prior_insecure
+
+        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+        for i in range(1, num_reviews + 1):
+            await _set_job(job_id, current_run=i, step=f"reviewing ({i}/{num_reviews})")
+            if jobs_repo is not None:
+                try:
+                    await asyncio.to_thread(
+                        jobs_repo.append_event,
+                        job_id=job_id,
+                        event_type="run_start",
+                        payload={"run": i, "num_reviews": num_reviews},
+                    )
+                except Exception:
+                    pass
+            debate_state = await run_debate_async(paper, thread_id=thread_id)
+
+            run_dir = REPORTS_DIR / paper.arxiv_id / datetime.now().strftime("%Y%m%d_%H%M%S")
+            if num_reviews > 1:
+                run_dir = run_dir.with_name(run_dir.name + f"_run{i}")
+            artifacts_map = generate_all_artifacts(debate_state, run_dir)
+            artifacts = _artifacts_from_map(artifacts_map)
+
+            artifact_row = {
+                "run": i,
+                "report_md": artifacts.report_md.relative_to(REPORTS_DIR).as_posix(),
+                "claims_json": artifacts.claims_json.relative_to(REPORTS_DIR).as_posix() if artifacts.claims_json else None,
+                "summary_json": artifacts.summary_json.relative_to(REPORTS_DIR).as_posix() if artifacts.summary_json else None,
+                "report_preview": artifacts.report_md.read_text(encoding="utf-8")[:20000],
+            }
+
+            async with _JOBS_LOCK:
+                j = _JOBS.get(job_id)
+                if j:
+                    j.artifacts.append(artifact_row)
+
+            if jobs_repo is not None:
+                try:
+                    await asyncio.to_thread(
+                        jobs_repo.update_job,
+                        job_id,
+                        patch={"artifacts": (j.artifacts if j else [artifact_row])},
+                    )
+                except Exception:
+                    pass
+
+                try:
+                    await asyncio.to_thread(
+                        jobs_repo.append_event,
+                        job_id=job_id,
+                        event_type="artifacts",
+                        payload={"run": i, "artifacts": artifact_row},
+                    )
+                except Exception:
+                    pass
+
+            # Optional persistence, one Supabase review row per run.
+            if False:
+                pass
+            if True:
+                async with _JOBS_LOCK:
+                    j = _JOBS.get(job_id)
+                    persist_to_supabase = bool(j.persist_to_supabase) if j else False
+                if persist_to_supabase:
+                    await _set_job(job_id, step=f"persisting ({i}/{num_reviews})")
+                    repo = _maybe_get_repo()
+                    if repo is None:
+                        async with _JOBS_LOCK:
+                            jj = _JOBS.get(job_id)
+                            if jj:
+                                jj.persisted_reviews.append({"run": i, "error": "Supabase not configured"})
+                    else:
+                        try:
+                            stored = repo.store_review_state(debate_state)
+                            async with _JOBS_LOCK:
+                                jj = _JOBS.get(job_id)
+                                if jj:
+                                    jj.persisted_reviews.append(
+                                        {
+                                            "run": i,
+                                            "review_id": stored.review_id,
+                                            "paper_id": stored.paper_id,
+                                            "created_at": stored.created_at,
+                                            "version": stored.version,
+                                        }
+                                    )
+
+                            if jobs_repo is not None:
+                                try:
+                                    await asyncio.to_thread(
+                                        jobs_repo.update_job,
+                                        job_id,
+                                        patch={"persisted_reviews": jj.persisted_reviews if jj else []},
+                                    )
+                                except Exception:
+                                    pass
+
+                                try:
+                                    await asyncio.to_thread(
+                                        jobs_repo.append_event,
+                                        job_id=job_id,
+                                        event_type="persisted_review",
+                                        payload={
+                                            "run": i,
+                                            "review_id": stored.review_id,
+                                            "paper_id": stored.paper_id,
+                                            "version": stored.version,
+                                        },
+                                    )
+                                except Exception:
+                                    pass
+                        except Exception as e:
+                            async with _JOBS_LOCK:
+                                jj = _JOBS.get(job_id)
+                                if jj:
+                                    jj.persisted_reviews.append({"run": i, "error": str(e)})
+
+                            if jobs_repo is not None:
+                                try:
+                                    await asyncio.to_thread(
+                                        jobs_repo.update_job,
+                                        job_id,
+                                        patch={"persisted_reviews": jj.persisted_reviews if jj else []},
+                                    )
+                                except Exception:
+                                    pass
+
+                                try:
+                                    await asyncio.to_thread(
+                                        jobs_repo.append_event,
+                                        job_id=job_id,
+                                        event_type="persist_error",
+                                        payload={"run": i, "error": str(e)},
+                                    )
+                                except Exception:
+                                    pass
+
+        await _set_job(job_id, status="adjudicated", step="complete")
+        if jobs_repo is not None:
+            try:
+                await asyncio.to_thread(
+                    jobs_repo.append_event,
+                    job_id=job_id,
+                    event_type="state",
+                    payload={"status": "adjudicated", "step": "complete"},
+                )
+            except Exception:
+                pass
+    except Exception as e:
+        await _set_job(job_id, status="error", step="error", error=f"{type(e).__name__}: {e}")
+        if jobs_repo is not None:
+            try:
+                await asyncio.to_thread(
+                    jobs_repo.append_event,
+                    job_id=job_id,
+                    event_type="state",
+                    payload={"status": "error", "error": f"{type(e).__name__}: {e}"},
+                )
+            except Exception:
+                pass
+    finally:
+        unregister_progress_callback(thread_id)
+
+
+@app.get("/jobs/{job_id}.json")
+async def job_status(job_id: str) -> JSONResponse:
+    jobs_repo = _maybe_get_jobs_repo()
+    if jobs_repo is not None:
+        row = await asyncio.to_thread(jobs_repo.get_job, job_id)
+        if row:
+            return JSONResponse({"ok": True, "job": _normalize_job_row(row)})
+
+    async with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return JSONResponse({"ok": False, "error": "Job not found"}, status_code=404)
+        return JSONResponse({"ok": True, "job": _job_to_dict(job)})
+
+
+@app.get("/jobs/{job_id}", response_class=HTMLResponse)
+async def job_page(request: Request, job_id: str) -> Any:
+    jobs_repo = _maybe_get_jobs_repo()
+    if jobs_repo is not None:
+        row = await asyncio.to_thread(jobs_repo.get_job, job_id)
+        if row:
+            return templates.TemplateResponse(
+                "job.html",
+                {
+                    "request": request,
+                    "job": _normalize_job_row(row),
+                },
+            )
+
+    async with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+    if not job:
+        return HTMLResponse("Job not found", status_code=404)
     return templates.TemplateResponse(
-        "review.html",
+        "job.html",
         {
             "request": request,
-            "arxiv_id_or_url": arxiv_id_or_url,
-            "allow_insecure_tls": allow_insecure_tls,
-            "persist_to_supabase": persist_to_supabase,
-            "persisted": persisted,
-            "persist_error": persist_error,
-            "persisted_review_id": (persisted or {}).get("review_id"),
-            "report_md": artifacts.report_md.relative_to(REPORTS_DIR).as_posix(),
-            "claims_json": artifacts.claims_json.relative_to(REPORTS_DIR).as_posix() if artifacts.claims_json else None,
-            "summary_json": artifacts.summary_json.relative_to(REPORTS_DIR).as_posix() if artifacts.summary_json else None,
-            "report_preview": artifacts.report_md.read_text(encoding="utf-8")[:20000],
+            "job": _job_to_dict(job),
         },
     )
+
+
+@app.get("/jobs/{job_id}/events.json")
+async def job_events(job_id: str, limit: int = 100) -> JSONResponse:
+    jobs_repo = _maybe_get_jobs_repo()
+    if jobs_repo is None:
+        return JSONResponse({"ok": False, "error": "Supabase not configured"}, status_code=400)
+    lim = min(max(int(limit), 1), 300)
+    events = await asyncio.to_thread(jobs_repo.list_events, job_id, limit=lim)
+    return JSONResponse({"ok": True, "events": events})
 
 
 @app.get("/download/{filename:path}")

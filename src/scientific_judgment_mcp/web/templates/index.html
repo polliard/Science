@@ -67,9 +67,14 @@
 
             <label>
                 <input type="checkbox" name="persist_to_supabase" value="true" {% if not supabase_configured
-                    %}disabled{% endif %} />
+                    %}disabled{% else %}checked{% endif %} />
                 Persist to Supabase (append-only audit trail)
             </label>
+
+            <label for="num_reviews">Independent review runs</label>
+            <input id="num_reviews" name="num_reviews" type="text" value="2" />
+            <p class="muted">Runs the full round-table review N times and (if checked) persists each run as a separate
+                review row.</p>
 
             {% if not supabase_configured %}
             <p class="warn">Supabase not configured (or init failed). Configure <code>.env</code> and apply

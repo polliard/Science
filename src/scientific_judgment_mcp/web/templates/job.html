@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Review job</title>
+    <style>
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system;
+            margin: 2rem;
+            max-width: 1100px;
+        }
+
+        .row {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            flex: 1;
+            min-width: 320px;
+        }
+
+        .muted {
+            color: #666;
+        }
+
+        .error {
+            color: #b00020;
+            white-space: pre-wrap;
+        }
+
+        pre {
+            background: #0b1020;
+            color: #e8e8e8;
+            padding: 1rem;
+            border-radius: 10px;
+            overflow-x: auto;
+        }
+
+        code {
+            background: #f6f6f6;
+            padding: 0.15rem 0.3rem;
+            border-radius: 6px;
+        }
+
+        a {
+            color: #2b6cb0;
+        }
+
+        button {
+            padding: 0.6rem 1rem;
+        }
+
+        ul {
+            margin: 0.5rem 0 0 1.25rem;
+        }
+    </style>
+</head>
+
+<body>
+    <p>
+        <a href="/">← back</a>
+        · <a href="/reviews">all reviews</a>
+    </p>
+
+    <h1>Review job</h1>
+    <p class="muted">job: <code id="job_id">{{ job.job_id }}</code></p>
+
+    <div class="row">
+        <div class="card">
+            <h2>Status</h2>
+            <ul>
+                <li>status: <code id="status">{{ job.status }}</code></li>
+                <li>step: <code id="step">{{ job.step }}</code></li>
+                <li>paper: <code id="paper">{{ job.normalized_arxiv_id or job.arxiv_id_or_url }}</code></li>
+                <li>run: <code id="run">{{ job.current_run }}</code> / <code id="runs">{{ job.num_reviews }}</code></li>
+                <li>messages: <code id="messages">{{ job.messages_count }}</code></li>
+                <li>last_agent: <code id="last_agent">{{ job.last_agent }}</code></li>
+                <li>last_phase: <code id="last_phase">{{ job.last_phase }}</code></li>
+            </ul>
+            <p class="muted">This page auto-updates every ~2s.</p>
+            <p id="err" class="error" style="display:none;"></p>
+        </div>
+
+        <div class="card">
+            <h2>Persisted reviews</h2>
+            {% if job.persisted_reviews and job.persisted_reviews|length > 0 %}
+            <ul id="persisted_list">
+                {% for r in job.persisted_reviews %}
+                <li>
+                    run <code>{{ r.run }}</code>:
+                    {% if r.review_id %}
+                    <a href="/reviews/{{ r.review_id }}">{{ r.review_id }}</a>
+                    {% else %}
+                    <span class="muted">{{ r.error }}</span>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="muted" id="persisted_empty">None yet.</p>
+            <ul id="persisted_list" style="display:none;"></ul>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Artifacts</h2>
+        {% if job.artifacts and job.artifacts|length > 0 %}
+        {% for a in job.artifacts %}
+        <h3 style="margin-bottom: 0.25rem;">Run {{ a.run }}</h3>
+        <ul>
+            <li><a href="/download/{{ a.report_md }}">{{ a.report_md }}</a></li>
+            {% if a.claims_json %}<li><a href="/download/{{ a.claims_json }}">{{ a.claims_json }}</a></li>{% endif %}
+            {% if a.summary_json %}<li><a href="/download/{{ a.summary_json }}">{{ a.summary_json }}</a></li>{% endif %}
+        </ul>
+        <details>
+            <summary>Report preview</summary>
+            <pre>{{ a.report_preview }}</pre>
+        </details>
+        {% endfor %}
+        {% else %}
+        <p class="muted">No artifacts yet.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Adjudication log</h2>
+        <p class="muted">Append-only job events (Supabase). Shows while adjudicating.</p>
+        <pre id="events">(loading)</pre>
+    </div>
+
+    <script>
+        const jobId = document.getElementById('job_id').innerText;
+
+        function escapeHtml(s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        async function tick() {
+            try {
+                const r = await fetch(`/jobs/${jobId}.json`, { cache: 'no-store' });
+                const data = await r.json();
+                if (!data.ok) {
+                    document.getElementById('err').style.display = 'block';
+                    document.getElementById('err').innerText = data.error || 'Job status error';
+                    return;
+                }
+
+                const job = data.job;
+                document.getElementById('status').innerText = job.status;
+                document.getElementById('step').innerText = job.step;
+                document.getElementById('paper').innerText = job.normalized_arxiv_id || job.arxiv_id_or_url;
+                document.getElementById('run').innerText = job.current_run;
+                document.getElementById('runs').innerText = job.num_reviews;
+                document.getElementById('messages').innerText = job.messages_count;
+                document.getElementById('last_agent').innerText = job.last_agent || '';
+                document.getElementById('last_phase').innerText = job.last_phase || '';
+
+                if (job.error) {
+                    document.getElementById('err').style.display = 'block';
+                    document.getElementById('err').innerText = job.error;
+                }
+
+                // Persisted list
+                const list = document.getElementById('persisted_list');
+                const empty = document.getElementById('persisted_empty');
+                if (list) {
+                    const items = Array.isArray(job.persisted_reviews) ? job.persisted_reviews : [];
+                    if (items.length > 0) {
+                        if (empty) empty.style.display = 'none';
+                        list.style.display = 'block';
+                        list.innerHTML = items.map((x) => {
+                            const run = escapeHtml(x.run);
+                            if (x.review_id) {
+                                const rid = escapeHtml(x.review_id);
+                                return `<li>run <code>${run}</code>: <a href="/reviews/${rid}">${rid}</a></li>`;
+                            }
+                            return `<li>run <code>${run}</code>: <span class="muted">${escapeHtml(x.error || 'error')}</span></li>`;
+                        }).join('');
+                    }
+                }
+
+                // Stop polling once adjudicated/error.
+                if (job.status === 'adjudicated' || job.status === 'complete' || job.status === 'error') {
+                    return;
+                }
+            } catch (e) {
+                document.getElementById('err').style.display = 'block';
+                document.getElementById('err').innerText = String(e);
+            }
+            setTimeout(tick, 2000);
+        }
+
+        async function tickEvents() {
+            const el = document.getElementById('events');
+            if (!el) return;
+            try {
+                const r = await fetch(`/jobs/${jobId}/events.json?limit=80`, { cache: 'no-store' });
+                const data = await r.json();
+                if (!data.ok) {
+                    el.innerText = data.error || 'No events available';
+                } else {
+                    const events = Array.isArray(data.events) ? data.events : [];
+                    const lines = events.slice(-80).map((e) => {
+                        const ts = e.created_at || '';
+                        const t = e.event_type || '';
+                        const p = JSON.stringify(e.payload || {});
+                        return `${ts}  ${t}  ${p}`;
+                    });
+                    el.innerText = lines.join('\n') || '(no events)';
+                }
+            } catch (e) {
+                el.innerText = String(e);
+            }
+            setTimeout(tickEvents, 2000);
+        }
+
+        setTimeout(tick, 500);
+        setTimeout(tickEvents, 700);
+    </script>
+</body>
+
+</html>

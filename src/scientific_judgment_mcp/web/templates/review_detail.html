@@ -83,10 +83,32 @@
             <ul>
                 <li>messages: <code>{{ (bundle.agent_messages|length) if bundle.agent_messages else 0 }}</code></li>
                 <li>verdict_versions:
-                    <code>{{ (bundle.verdict_versions|length) if bundle.verdict_versions else 0 }}</code></li>
+                    <code>{{ (bundle.verdict_versions|length) if bundle.verdict_versions else 0 }}</code>
+                </li>
                 <li>human_feedback: <code>{{ (bundle.human_feedback|length) if bundle.human_feedback else 0 }}</code>
                 </li>
             </ul>
+        </div>
+
+        <div class="card">
+            <h2>Publishability</h2>
+            {% if publishability %}
+            <ul>
+                <li>decision: <code>{{ publishability.decision }}</code></li>
+                <li>publishable: <code>{{ publishability.publishable }}</code></li>
+                <li>provisional: <code>{{ publishability.provisional }}</code></li>
+            </ul>
+            {% if publishability.gates %}
+            <p class="muted" style="margin: 0.75rem 0 0 0;">gates</p>
+            <pre>{{ publishability.gates | tojson }}</pre>
+            {% endif %}
+            {% if publishability.reasons %}
+            <p class="muted" style="margin: 0.75rem 0 0 0;">reasons</p>
+            <pre>{{ publishability.reasons | tojson }}</pre>
+            {% endif %}
+            {% else %}
+            <p class="muted">No publishability computed (no verdict found).</p>
+            {% endif %}
         </div>
     </div>
 

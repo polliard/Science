@@ -6,7 +6,7 @@ multiple LLM backends (per-agent explicit model choice).
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Callable
 from datetime import datetime
 
 from langgraph.graph import StateGraph, END
@@ -27,6 +27,20 @@ from scientific_judgment_mcp.agents import get_all_agent_specs
 from scientific_judgment_mcp.llm.runner import AgentRunner
 from scientific_judgment_mcp.llm.config import ReviewModelsConfig, load_models_config_from_env
 from scientific_judgment_mcp.llm.prompts import build_phase_prompt, render_paper_context_for_llm
+
+
+# Progress callbacks are a best-effort mechanism for UIs.
+# Keyed by LangGraph thread_id (which may differ from arXiv id in web runs).
+ProgressCallback = Callable[[AgentMessage, DebateState], None]
+_PROGRESS_CALLBACKS: dict[str, ProgressCallback] = {}
+
+
+def register_progress_callback(thread_id: str, cb: ProgressCallback) -> None:
+    _PROGRESS_CALLBACKS[thread_id] = cb
+
+
+def unregister_progress_callback(thread_id: str) -> None:
+    _PROGRESS_CALLBACKS.pop(thread_id, None)
 
 
 def create_debate_graph() -> StateGraph:
@@ -108,6 +122,15 @@ def _append_agent_message(
         max_tokens=(model or {}).get("max_tokens"),
     )
     state["messages"].append(msg)
+
+    try:
+        tid = state.get("_thread_id") or state["paper"].arxiv_id
+        cb = _PROGRESS_CALLBACKS.get(str(tid))
+        if cb is not None:
+            cb(msg, state)
+    except Exception:
+        # Progress callbacks must never break the core review pipeline.
+        pass
 
 
 def _get_model_cfg(state: DebateState, role_key: str) -> dict[str, Any]:
@@ -650,7 +673,12 @@ def synthesize(state: DebateState) -> DebateState:
 # ============================================================================
 
 
-async def run_debate_async(paper: PaperContext, models_config: ReviewModelsConfig | None = None) -> DebateState:
+async def run_debate_async(
+    paper: PaperContext,
+    models_config: ReviewModelsConfig | None = None,
+    *,
+    thread_id: str | None = None,
+) -> DebateState:
     """Execute the full scientific judgment debate for a paper.
 
     Args:
@@ -671,8 +699,10 @@ async def run_debate_async(paper: PaperContext, models_config: ReviewModelsConfi
         models_config = load_models_config_from_env(_default_models_config())
 
     # Initial state
+    tid = thread_id or paper.arxiv_id
     initial_state: DebateState = {
         "paper": paper,
+        "_thread_id": tid,
         "phase": DebatePhase.INITIALIZATION,
         "messages": [],
         "agent_model_configs": {k: v.model_dump() for k, v in models_config.agents.items()},
@@ -690,13 +720,18 @@ async def run_debate_async(paper: PaperContext, models_config: ReviewModelsConfi
     }
 
     # Run the graph
-    config = {"configurable": {"thread_id": paper.arxiv_id}}
+    config = {"configurable": {"thread_id": tid}}
     final_state = await app.ainvoke(initial_state, config)
 
     return final_state
 
 
-def run_debate(paper: PaperContext, models_config: ReviewModelsConfig | None = None) -> DebateState:
+def run_debate(
+    paper: PaperContext,
+    models_config: ReviewModelsConfig | None = None,
+    *,
+    thread_id: str | None = None,
+) -> DebateState:
     """Sync wrapper for CLI usage."""
 
-    return asyncio.run(run_debate_async(paper, models_config=models_config))
+    return asyncio.run(run_debate_async(paper, models_config=models_config, thread_id=thread_id))
