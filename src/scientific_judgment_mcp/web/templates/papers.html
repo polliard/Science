@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Papers</title>
+    <style>
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system;
+            margin: 2rem;
+            max-width: 1100px;
+        }
+
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .muted {
+            color: #666;
+        }
+
+        code {
+            background: #f6f6f6;
+            padding: 0.15rem 0.3rem;
+            border-radius: 6px;
+        }
+
+        a {
+            color: #2b6cb0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            text-align: left;
+            padding: 0.5rem;
+            border-bottom: 1px solid #eee;
+            vertical-align: top;
+        }
+
+        .title {
+            max-width: 520px;
+        }
+    </style>
+</head>
+
+<body>
+    <p>
+        <a href="/">← back</a>
+        · <a href="/reviews">all reviews</a>
+    </p>
+
+    <h1>Papers with reviews</h1>
+    <p class="muted">Browse papers to find prior reviews without re-running.</p>
+
+    <div class="card">
+        {% if papers and papers|length > 0 %}
+        <table>
+            <thead>
+                <tr>
+                    <th>arXiv</th>
+                    <th class="title">Title</th>
+                    <th>Reviews</th>
+                    <th>Latest</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in papers %}
+                <tr>
+                    <td>
+                        <a href="/papers/{{ p.paper_id }}"><code>{{ p.arxiv_id }}</code></a>
+                    </td>
+                    <td class="title">{{ p.title }}</td>
+                    <td><code>{{ p.review_count }}</code></td>
+                    <td>
+                        {% if p.latest_review_id %}
+                        <a href="/reviews/{{ p.latest_review_id }}"><code>{{ p.latest_review_id }}</code></a>
+                        <div class="muted">{{ p.latest_review_created_at }}</div>
+                        {% else %}
+                        <span class="muted">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="muted">No papers found.</p>
+        {% endif %}
+    </div>
+</body>
+
+</html>

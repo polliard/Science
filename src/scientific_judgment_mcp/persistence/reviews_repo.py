@@ -212,6 +212,87 @@ class ReviewsRepository:
         ).data
         return rows or []
 
+    def list_papers_with_reviews(self, *, limit: int = 50, reviews_scan_limit: int = 500) -> list[dict[str, Any]]:
+        """Return papers that have at least one review.
+
+        Supabase/PostgREST grouping is intentionally avoided here for simplicity.
+        We scan recent reviews, then fetch the corresponding papers.
+        """
+
+        recent_reviews = (
+            self.client.table("reviews")
+            .select("id, paper_id, created_at")
+            .order("created_at", desc=True)
+            .limit(reviews_scan_limit)
+            .execute()
+        ).data or []
+
+        paper_ids: list[str] = []
+        for r in recent_reviews:
+            pid = r.get("paper_id")
+            if pid and pid not in paper_ids:
+                paper_ids.append(pid)
+            if len(paper_ids) >= limit:
+                break
+
+        if not paper_ids:
+            return []
+
+        papers = (
+            self.client.table("papers")
+            .select("id, arxiv_id, title, created_at")
+            .in_("id", paper_ids)
+            .execute()
+        ).data or []
+
+        counts: dict[str, int] = {}
+        latest_review: dict[str, str] = {}
+        latest_created_at: dict[str, str] = {}
+        for r in recent_reviews:
+            pid = r.get("paper_id")
+            if not pid:
+                continue
+            counts[pid] = counts.get(pid, 0) + 1
+            # recent_reviews is ordered desc, so first seen is latest
+            if pid not in latest_review:
+                latest_review[pid] = r.get("id")
+                latest_created_at[pid] = r.get("created_at")
+
+        paper_by_id = {p["id"]: p for p in papers if p.get("id")}
+        result = []
+        for pid in paper_ids:
+            p = paper_by_id.get(pid)
+            if not p:
+                continue
+            result.append(
+                {
+                    "paper_id": pid,
+                    "arxiv_id": p.get("arxiv_id"),
+                    "title": p.get("title"),
+                    "paper_created_at": p.get("created_at"),
+                    "review_count": counts.get(pid, 0),
+                    "latest_review_id": latest_review.get(pid),
+                    "latest_review_created_at": latest_created_at.get(pid),
+                }
+            )
+
+        # Keep same order as paper_ids derived from recent reviews
+        return result
+
+    def list_reviews_for_paper(self, *, paper_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        rows = (
+            self.client.table("reviews")
+            .select("id, paper_id, created_at")
+            .eq("paper_id", paper_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        ).data
+        return rows or []
+
+    def get_paper(self, paper_id: str) -> dict[str, Any]:
+        return self.client.table("papers").select("*").eq("id", paper_id).single().execute().data
+
     def compare_verdict_versions(self, review_id: str, v1: int, v2: int) -> dict[str, Any]:
         a = self.client.table("verdict_versions").select("*").eq("review_id", review_id).eq("version", v1).single().execute().data
         b = self.client.table("verdict_versions").select("*").eq("review_id", review_id).eq("version", v2).single().execute().data

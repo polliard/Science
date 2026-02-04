@@ -104,6 +104,34 @@ async def list_reviews(request: Request) -> Any:
     )
 
 
+@app.get("/papers", response_class=HTMLResponse)
+async def list_papers(request: Request) -> Any:
+    repo = _require_repo()
+    papers = repo.list_papers_with_reviews(limit=50)
+    return templates.TemplateResponse(
+        "papers.html",
+        {
+            "request": request,
+            "papers": papers,
+        },
+    )
+
+
+@app.get("/papers/{paper_id}", response_class=HTMLResponse)
+async def paper_detail(request: Request, paper_id: str) -> Any:
+    repo = _require_repo()
+    paper = repo.get_paper(paper_id)
+    reviews = repo.list_reviews_for_paper(paper_id=paper_id, limit=50)
+    return templates.TemplateResponse(
+        "paper_detail.html",
+        {
+            "request": request,
+            "paper": paper,
+            "reviews": reviews,
+        },
+    )
+
+
 @app.get("/reviews/{review_id}", response_class=HTMLResponse)
 async def review_detail(request: Request, review_id: str) -> Any:
     repo = _require_repo()

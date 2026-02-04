@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Paper</title>
+    <style>
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system;
+            margin: 2rem;
+            max-width: 1100px;
+        }
+
+        .row {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            flex: 1;
+            min-width: 340px;
+        }
+
+        .muted {
+            color: #666;
+        }
+
+        pre {
+            background: #0b1020;
+            color: #e8e8e8;
+            padding: 1rem;
+            border-radius: 10px;
+            overflow-x: auto;
+        }
+
+        code {
+            background: #f6f6f6;
+            padding: 0.15rem 0.3rem;
+            border-radius: 6px;
+        }
+
+        a {
+            color: #2b6cb0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            text-align: left;
+            padding: 0.5rem;
+            border-bottom: 1px solid #eee;
+            vertical-align: top;
+        }
+    </style>
+</head>
+
+<body>
+    <p>
+        <a href="/papers">← back to papers</a>
+        · <a href="/reviews">all reviews</a>
+    </p>
+
+    <h1>Paper</h1>
+    <p class="muted">
+        arXiv: <code>{{ paper.arxiv_id }}</code>
+    </p>
+
+    <div class="card">
+        <h2>Title</h2>
+        <p>{{ paper.title }}</p>
+        <h3 class="muted">Authors</h3>
+        <pre>{{ paper.authors | tojson }}</pre>
+        <h3 class="muted">Abstract</h3>
+        <pre>{{ paper.abstract }}</pre>
+    </div>
+
+    <div class="card">
+        <h2>Reviews for this paper</h2>
+        {% if reviews and reviews|length > 0 %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Review ID</th>
+                    <th>Created</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in reviews %}
+                <tr>
+                    <td><a href="/reviews/{{ r.id }}"><code>{{ r.id }}</code></a></td>
+                    <td class="muted">{{ r.created_at }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="muted">No reviews found for this paper.</p>
+        {% endif %}
+    </div>
+</body>
+
+</html>
